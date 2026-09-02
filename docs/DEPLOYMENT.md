@@ -26,7 +26,10 @@ The frontend API base URL is public and baked into the frontend build. Every oth
 |---|---|
 | `DATABASE_URL` | Managed private PostgreSQL TLS connection string |
 | `FRONTEND_URLS` | Comma-separated exact dashboard origins, such as `https://<merch-domain>` |
-| `JWT_SECRET`, `IP_HASH_SALT`, `OPERATOR_API_KEY` | Three distinct cryptographically random values, each at least 32 characters |
+| `JWT_SECRET`, `OPERATOR_API_KEY` | Two distinct cryptographically random values, each at least 32 characters |
+| `ALLOW_SPONSOR_SELF_REGISTRATION` | Keep `false` unless the owner has approved a public account-creation flow |
+| `REFERRAL_ANALYTICS_ENABLED` | Keep `false` unless the owner has approved the referral collection purpose, notice, retention, and access controls |
+| `IP_HASH_SALT` | Cryptographically random value of at least 32 characters; required only when referral analytics are enabled |
 | `JWT_EXPIRES_IN`, `SESSION_COOKIE_MAX_AGE_SECONDS` | Matching short session lifetime, such as `8h` and `28800` |
 | `SHOPIFY_STORE_URL` | Shopify hostname only |
 | `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_WEBHOOK_SECRET` | Shopify custom app |
@@ -37,6 +40,8 @@ The frontend API base URL is public and baked into the frontend build. Every oth
 | `DATABASE_SSL_CA` | Provider CA only when required; retain verified TLS by default |
 
 Set `NODE_ENV=production`. Production startup fails when its required configuration is missing, insecure TLS is selected without explicit acknowledgement, origins are not HTTPS, or the Shopify store value is malformed.
+
+The dashboard is an invitation-only operations portal, not a public storefront. Sponsor self-registration and referral analytics are disabled unless their explicit opt-in settings are enabled. Do not expose referral endpoints or collect referral data until the owner has approved the collection purpose, notice, retention, and access controls.
 
 ## Release procedure
 

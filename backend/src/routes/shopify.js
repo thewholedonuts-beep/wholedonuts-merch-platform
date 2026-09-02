@@ -74,7 +74,7 @@ router.post('/sync-products', authenticateToken, requireAdmin, async (req, res, 
           )
         : await query(
             `INSERT INTO products (name, description, base_cost, markup_percent, category, print_methods, available_colors, customization_options, shopify_product_id, inventory_count, active)
-             VALUES ($1, $2, $3, 20, $4, $5, $6::jsonb, $7::jsonb, $8, $9, true)
+             VALUES ($1, $2, $3, 20, $4, $5, $6::jsonb, $7::jsonb, $8, $9, false)
              RETURNING *`,
             params
           );

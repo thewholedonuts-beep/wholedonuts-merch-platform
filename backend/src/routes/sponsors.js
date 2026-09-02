@@ -6,6 +6,7 @@ const { authenticateToken, requireSponsorAccess } = require('../middleware/auth'
 const { generateUniqueReferralCode } = require('../utils/referralCode');
 const { calculateEffortScore, applyTierDiscountCap } = require('../utils/effortScore');
 const { clearSessionCookies, setSessionCookies } = require('../middleware/security');
+const { selfRegistrationEnabled } = require('../config/environment');
 
 const router = express.Router();
 
@@ -20,6 +21,10 @@ function sanitizeSponsor(row) {
 }
 
 router.post('/register', async (req, res, next) => {
+  if (!selfRegistrationEnabled()) {
+    return res.status(403).json({ error: 'Sponsor self-registration is not available.' });
+  }
+
   try {
     const { name, email, password, totalContribution = 0 } = req.body;
 

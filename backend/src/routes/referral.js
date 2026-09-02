@@ -3,9 +3,17 @@ const { query } = require('../config/database');
 const { referralValidationLimiter } = require('../middleware/rateLimiter');
 const { hashIp, validateReferralCodeFormat } = require('../utils/referralCode');
 const { calculateEffortScore, applyTierDiscountCap } = require('../utils/effortScore');
+const { referralAnalyticsEnabled } = require('../config/environment');
 
 const router = express.Router();
 const botPattern = /(bot|crawl|spider|headless|curl|wget|python|axios)/i;
+
+router.use((_req, res, next) => {
+  if (!referralAnalyticsEnabled()) {
+    return res.status(503).json({ error: 'Referral analytics are not available.' });
+  }
+  return next();
+});
 
 function parseMetadata(value) {
   return value && typeof value === 'object' ? value : {};
