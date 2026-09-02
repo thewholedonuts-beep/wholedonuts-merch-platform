@@ -1,6 +1,10 @@
 # Whole Donuts Merch Platform
 
-Sponsor merchandise operations built with a Next.js dashboard, Express API, PostgreSQL, Shopify, and Printful fulfillment. Shopify is the checkout and order system of record; PostgreSQL stores Whole Donuts sponsor, referral, and operational data.
+Private sponsor merchandise operations built with a Next.js dashboard, Express API, PostgreSQL, Shopify, and Printful fulfillment. Shopify is the checkout and order system of record; PostgreSQL stores Whole Donuts sponsor, referral, and operational data.
+
+## Launch status
+
+This repository does not establish a public storefront or a production destination. The dashboard is invitation-only and its placeholder domains are examples, not live services. Do not link it from the canonical Whole Donuts site until the owner confirms a production HTTPS destination, the relevant catalog/design rights, checkout and fulfillment readiness, and privacy terms for any referral program.
 
 ## Production architecture
 
@@ -44,6 +48,8 @@ Run the metric refresh from one provider scheduler, not from each API instance.
 - [Printful setup](docs/PRINTFUL_SETUP.md) covers the Shopify fulfillment connection and server-side API token.
 - `POST /api/orders/webhook/shopify` accepts only configured topics with a valid Shopify HMAC and webhook delivery ID. Replayed deliveries are acknowledged without reprocessing.
 - `GET /api/printful/status` is an operator-only connectivity check. Do not expose integration tokens to the frontend.
+
+Catalog products imported from Shopify start inactive and are not returned by public catalog or customization endpoints until an operator explicitly approves them. Sponsor self-registration and referral analytics both remain disabled unless deliberately enabled after owner review.
 
 ## Security boundary
 

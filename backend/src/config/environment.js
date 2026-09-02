@@ -4,6 +4,14 @@ dotenv.config();
 
 const isProduction = process.env.NODE_ENV === 'production';
 
+function selfRegistrationEnabled() {
+  return process.env.ALLOW_SPONSOR_SELF_REGISTRATION === 'true';
+}
+
+function referralAnalyticsEnabled() {
+  return process.env.REFERRAL_ANALYTICS_ENABLED === 'true';
+}
+
 function parseOrigins(value) {
   const origins = String(value || '')
     .split(',')
@@ -46,7 +54,6 @@ function validateProductionEnvironment() {
 
   const required = [
     'JWT_SECRET',
-    'IP_HASH_SALT',
     'OPERATOR_API_KEY',
     'FRONTEND_URLS',
     'SHOPIFY_STORE_URL',
@@ -54,13 +61,21 @@ function validateProductionEnvironment() {
     'SHOPIFY_WEBHOOK_SECRET',
     'PRINTFUL_API_KEY',
   ];
+  if (referralAnalyticsEnabled()) {
+    required.push('IP_HASH_SALT');
+  }
   const missing = required.filter((name) => !process.env[name]);
 
   if (missing.length) {
     throw new Error(`Missing required production environment variables: ${missing.join(', ')}`);
   }
 
-  ['JWT_SECRET', 'IP_HASH_SALT', 'OPERATOR_API_KEY'].forEach((name) => {
+  const minimumLengthSecrets = ['JWT_SECRET', 'OPERATOR_API_KEY'];
+  if (referralAnalyticsEnabled()) {
+    minimumLengthSecrets.push('IP_HASH_SALT');
+  }
+
+  minimumLengthSecrets.forEach((name) => {
     if (String(process.env[name]).length < 32) {
       throw new Error(`${name} must be at least 32 characters in production.`);
     }
@@ -87,6 +102,8 @@ function trustProxySetting() {
 module.exports = {
   frontendOrigins,
   isProduction,
+  referralAnalyticsEnabled,
+  selfRegistrationEnabled,
   trustProxySetting,
   validateDatabaseEnvironment,
   validateProductionEnvironment,

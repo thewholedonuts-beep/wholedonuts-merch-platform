@@ -49,17 +49,12 @@ function calculateCustomizationPrice(product, payload) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const conditions = [];
+    const conditions = ['active = true'];
     const values = [];
 
     if (req.query.category) {
       conditions.push(`category = $${conditions.length + 1}`);
       values.push(req.query.category);
-    }
-
-    if (req.query.active !== undefined) {
-      conditions.push(`active = $${conditions.length + 1}`);
-      values.push(req.query.active === 'true');
     }
 
     const sql = `SELECT * FROM products ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY created_at DESC`;
@@ -72,7 +67,7 @@ router.get('/', async (req, res, next) => {
 
 router.get('/:id', async (req, res, next) => {
   try {
-    const result = await query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+    const result = await query('SELECT * FROM products WHERE id = $1 AND active = true', [req.params.id]);
     if (!result.rowCount) {
       return res.status(404).json({ error: 'Product not found.' });
     }
@@ -167,7 +162,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res, next) => {
 
 router.post('/:id/customize', async (req, res, next) => {
   try {
-    const result = await query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+    const result = await query('SELECT * FROM products WHERE id = $1 AND active = true', [req.params.id]);
     if (!result.rowCount) {
       return res.status(404).json({ error: 'Product not found.' });
     }
