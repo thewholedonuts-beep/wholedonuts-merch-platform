@@ -8,9 +8,9 @@ type Product = {
   id: string;
   name: string;
   description: string;
-  final_price: number;
+  price: number;
   category: string;
-  inventory_count: number;
+  inventoryCount: number;
 };
 
 export default function ProductsPage() {
@@ -44,8 +44,8 @@ export default function ProductsPage() {
             <h2 className="mt-3 text-2xl font-semibold text-white">{product.name}</h2>
             <p className="mt-3 text-sm text-slate-300">{product.description}</p>
             <div className="mt-6 flex items-center justify-between text-sm text-slate-300">
-              <span>Inventory: {product.inventory_count}</span>
-              <span className="text-lg font-semibold text-white">${Number(product.final_price).toFixed(2)}</span>
+              <span>Inventory: {product.inventoryCount}</span>
+              <span className="text-lg font-semibold text-white">${Number(product.price).toFixed(2)}</span>
             </div>
             <Link
               href={`/dashboard/customize/${product.id}`}

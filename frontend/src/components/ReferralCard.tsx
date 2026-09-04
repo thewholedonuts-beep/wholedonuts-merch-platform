@@ -24,7 +24,7 @@ export function ReferralCard({ code, tier, discountEarned }: ReferralCardProps) 
           <p className="text-sm uppercase tracking-[0.25em] text-brand-300">Referral code</p>
           <h3 className="mt-2 text-2xl font-semibold text-white">{code}</h3>
           <p className="mt-3 text-sm text-slate-300">
-            Sponsor tier: <span className="font-semibold capitalize text-brand-200">{tier}</span>
+            Crumb Saver level: <span className="font-semibold capitalize text-brand-200">{tier}</span>
           </p>
           <p className="text-sm text-slate-300">Discount earned: {(discountEarned * 100).toFixed(0)}%</p>
         </div>

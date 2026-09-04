@@ -14,6 +14,7 @@ type DashboardResponse = {
     referral_code: string;
     discount_earned: number;
     effort_score: number;
+    rewards_consent: boolean;
   };
   analytics: {
     clicks: number;
@@ -71,7 +72,13 @@ export default function DashboardPage() {
 
       {data && (
         <div className="mt-10 space-y-8">
-          <ReferralCard code={data.sponsor.referral_code} tier={data.sponsor.tier} discountEarned={data.analytics.discountEarned} />
+          {data.sponsor.rewards_consent ? (
+            <ReferralCard code={data.sponsor.referral_code} tier={data.sponsor.tier} discountEarned={data.analytics.discountEarned} />
+          ) : (
+            <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 text-slate-300 shadow-card">
+              Rewards are inactive until you explicitly accept the approved rewards privacy notice.
+            </section>
+          )}
           <SponsorStats {...data.analytics} />
           <section className="rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-card">
             <div className="flex items-center justify-between">

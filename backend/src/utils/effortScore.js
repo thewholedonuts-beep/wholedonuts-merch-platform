@@ -1,13 +1,23 @@
-function calculateEffortScore({ clicks = 0, shares = 0, conversions = 0, usageCount = 0 }) {
+function calculateEffortScore(metrics = {}) {
+  const {
+    clicks = 0,
+    shares = 0,
+    conversions = 0,
+    usageCount = metrics.usage_count || 0,
+    verifiedRewardPoints,
+  } = metrics;
   const numericClicks = Number(clicks) || 0;
   const numericShares = Number(shares) || 0;
   const numericConversions = Number(conversions) || 0;
   const numericUsage = Number(usageCount) || 0;
+  const verifiedScore = verifiedRewardPoints === undefined
+    ? numericConversions * 5
+    : Math.max(Number(verifiedRewardPoints) || 0, 0);
 
-  const preThresholdScore = numericClicks * 0.5 + numericShares * 1 + numericConversions * 5;
-  const postThresholdScore = numericConversions * 5;
+  const preThresholdScore = numericClicks * 0.5 + numericShares * 1 + verifiedScore;
+  const postThresholdScore = verifiedScore;
   const rewardMultiplier = numericUsage >= 4 ? postThresholdScore : preThresholdScore;
-  const discountEarned = Math.min(rewardMultiplier * 0.01, 0.3);
+  const discountEarned = Math.min(verifiedScore * 0.01, 0.3);
 
   return {
     effortScore: Number(rewardMultiplier.toFixed(2)),
@@ -16,33 +26,32 @@ function calculateEffortScore({ clicks = 0, shares = 0, conversions = 0, usageCo
   };
 }
 
-function determineTier(totalContribution = 0) {
-  const contribution = Number(totalContribution) || 0;
-  if (contribution >= 2500) {
+function determineTier(verifiedRewardPoints = 0) {
+  const points = Math.max(Number(verifiedRewardPoints) || 0, 0);
+  if (points >= 20) {
     return {
-      tier: 'gold',
+      tier: 'community',
       maxDiscount: 0.3,
       customizationLimit: null,
     };
   }
-
-  if (contribution >= 500) {
+  if (points >= 5) {
     return {
-      tier: 'silver',
+      tier: 'maker',
       maxDiscount: 0.2,
       customizationLimit: 3,
     };
   }
 
   return {
-    tier: 'bronze',
+    tier: 'crumb',
     maxDiscount: 0.1,
     customizationLimit: 1,
   };
 }
 
-function applyTierDiscountCap(discountEarned, totalContribution) {
-  const tierDetails = determineTier(totalContribution);
+function applyTierDiscountCap(discountEarned, verifiedRewardPoints) {
+  const tierDetails = determineTier(verifiedRewardPoints);
   return {
     ...tierDetails,
     discountEarned: Number(Math.min(Number(discountEarned) || 0, tierDetails.maxDiscount).toFixed(2)),

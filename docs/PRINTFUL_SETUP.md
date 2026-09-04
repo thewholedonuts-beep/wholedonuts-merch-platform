@@ -1,5 +1,7 @@
 # Printful fulfillment setup
 
+This document is retained for Printful-specific context. For the shared Printful/Printify runtime and reconciliation endpoints, see [fulfillment provider setup](FULFILLMENT_PROVIDERS.md).
+
 Connect Printful to the same Shopify store so Shopify remains the checkout and order record while Printful handles product fulfillment. Map every Shopify product/variant to its Printful template before opening customer checkout.
 
 The API's `PRINTFUL_API_KEY` is server-side only. It supports the protected `GET /api/printful/status` connectivity check and is reserved for future direct reconciliation workflows; it must not be sent to the Next.js application or placed in `NEXT_PUBLIC_*` configuration.

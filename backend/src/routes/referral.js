@@ -1,68 +1,39 @@
 const express = require('express');
-const { query } = require('../config/database');
+const { query, withTransaction } = require('../config/database');
 const { referralValidationLimiter } = require('../middleware/rateLimiter');
 const { hashIp, validateReferralCodeFormat } = require('../utils/referralCode');
-const { calculateEffortScore, applyTierDiscountCap } = require('../utils/effortScore');
-const { referralAnalyticsEnabled } = require('../config/environment');
+const { calculateEffortScore } = require('../utils/effortScore');
+const { referralAnalyticsEnabled, rewardsEnabled } = require('../config/environment');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { isPublicReferralEventType, recordVerifiedInviteAcceptance } = require('../services/rewards');
 
 const router = express.Router();
 const botPattern = /(bot|crawl|spider|headless|curl|wget|python|axios)/i;
 
-router.use((_req, res, next) => {
+function retentionDays() {
+  const value = Number(process.env.REFERRAL_RETENTION_DAYS || 365);
+  return Number.isSafeInteger(value) && value > 0 ? value : 365;
+}
+
+function requireAnalytics(_req, res, next) {
   if (!referralAnalyticsEnabled()) {
     return res.status(503).json({ error: 'Referral analytics are not available.' });
   }
   return next();
-});
+}
+
+function requireRewards(_req, res, next) {
+  if (!rewardsEnabled()) {
+    return res.status(503).json({ error: 'Crumb Saver rewards are not available.' });
+  }
+  return next();
+}
 
 function parseMetadata(value) {
   return value && typeof value === 'object' ? value : {};
 }
 
-async function updateSponsorPerformanceByCode(codeId) {
-  const metricsResult = await query(
-    `SELECT rc.sponsor_id,
-            COALESCE(MAX(rc.usage_count), 0) AS usage_count,
-            COALESCE(SUM(CASE WHEN re.event_type = 'click' THEN 1 ELSE 0 END), 0) AS clicks,
-            COALESCE(SUM(CASE WHEN re.event_type = 'share' THEN 1 ELSE 0 END), 0) AS shares,
-            COALESCE(SUM(CASE WHEN re.event_type = 'conversion' THEN 1 ELSE 0 END), 0) AS conversions,
-            COALESCE(MAX(s.total_contribution), 0) AS total_contribution
-     FROM referral_codes rc
-     JOIN sponsors s ON s.id = rc.sponsor_id
-     LEFT JOIN referral_events re ON re.code_id = rc.id
-     WHERE rc.id = $1
-     GROUP BY rc.sponsor_id`,
-    [codeId]
-  );
-
-  if (!metricsResult.rowCount) {
-    return null;
-  }
-
-  const metrics = metricsResult.rows[0];
-  const effort = calculateEffortScore(metrics);
-  const tierState = applyTierDiscountCap(effort.discountEarned, metrics.total_contribution);
-
-  await query(
-    `UPDATE sponsors
-     SET effort_score = $2,
-         discount_earned = $3,
-         tier = $4,
-         customization_limit = $5,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [metrics.sponsor_id, effort.effortScore, tierState.discountEarned, tierState.tier, tierState.customizationLimit]
-  );
-
-  return {
-    ...metrics,
-    effortScore: effort.effortScore,
-    discountEarned: tierState.discountEarned,
-    tier: tierState.tier,
-  };
-}
-
-router.post('/validate', referralValidationLimiter, async (req, res, next) => {
+router.post('/validate', requireAnalytics, referralValidationLimiter, async (req, res, next) => {
   try {
     const { code, sponsorId, customerEmail } = req.body;
     const userAgent = req.get('user-agent') || '';
@@ -70,9 +41,9 @@ router.post('/validate', referralValidationLimiter, async (req, res, next) => {
 
     if (!code || !validateReferralCodeFormat(code)) {
       await query(
-        `INSERT INTO code_validations (code_id, attempt_ip_hash, validation_result, reason, action_taken)
-         VALUES (NULL, $1, 'fail', 'Invalid code format or checksum.', 'Rejected request')`,
-        [ipHash]
+        `INSERT INTO code_validations (code_id, attempt_ip_hash, validation_result, reason, action_taken, retention_expires_at)
+         VALUES (NULL, $1, 'fail', 'Invalid code format or checksum.', 'Rejected request', NOW() + ($2 * INTERVAL '1 day'))`,
+        [ipHash, retentionDays()]
       );
       return res.status(400).json({ valid: false, reason: 'Invalid referral code format.' });
     }
@@ -81,7 +52,10 @@ router.post('/validate', referralValidationLimiter, async (req, res, next) => {
       `SELECT rc.*, s.id AS sponsor_id, s.referral_code AS sponsor_referral_code, s.safety_status
        FROM referral_codes rc
        JOIN sponsors s ON s.id = rc.sponsor_id
-       WHERE rc.code_string = $1`,
+       WHERE rc.code_string = $1
+         AND s.rewards_consent = true
+         AND s.rewards_consent_at IS NOT NULL
+         AND s.rewards_consent_withdrawn_at IS NULL`,
       [code]
     );
 
@@ -185,14 +159,15 @@ router.post('/validate', referralValidationLimiter, async (req, res, next) => {
     }
 
     await query(
-      `INSERT INTO code_validations (code_id, attempt_ip_hash, validation_result, reason, action_taken)
-       VALUES ($1, $2, $3, $4, $5)`,
+      `INSERT INTO code_validations (code_id, attempt_ip_hash, validation_result, reason, action_taken, retention_expires_at)
+       VALUES ($1, $2, $3, $4, $5, NOW() + ($6 * INTERVAL '1 day'))`,
       [
         referralCode.id,
         ipHash,
         result,
         reasons.join(' ') || 'Validation passed.',
         result === 'pass' ? 'Allow redemption' : 'Hold for review',
+        retentionDays(),
       ]
     );
 
@@ -206,17 +181,27 @@ router.post('/validate', referralValidationLimiter, async (req, res, next) => {
   }
 });
 
-router.post('/event', async (req, res, next) => {
+router.post('/event', requireAnalytics, async (req, res, next) => {
   try {
-    const { code, eventType, referrer, orderId, metadata } = req.body;
+    const { code, eventType, referrer, metadata } = req.body;
     const userAgent = req.get('user-agent') || '';
     const ipHash = hashIp(req.ip);
 
-    if (!code || !['click', 'share', 'conversion', 'flagged'].includes(eventType)) {
-      return res.status(400).json({ error: 'Valid code and eventType are required.' });
+    if (!code || !isPublicReferralEventType(eventType)) {
+      return res.status(400).json({ error: 'Only click, share, and flagged referral events are accepted publicly.' });
     }
 
-    const codeResult = await query('SELECT * FROM referral_codes WHERE code_string = $1', [code]);
+    const codeResult = await query(
+      `SELECT rc.*
+       FROM referral_codes rc
+       JOIN sponsors s ON s.id = rc.sponsor_id
+       WHERE rc.code_string = $1
+         AND rc.status = 'active'
+         AND s.rewards_consent = true
+         AND s.rewards_consent_at IS NOT NULL
+         AND s.rewards_consent_withdrawn_at IS NULL`,
+      [code]
+    );
     if (!codeResult.rowCount) {
       return res.status(404).json({ error: 'Referral code not found.' });
     }
@@ -224,12 +209,10 @@ router.post('/event', async (req, res, next) => {
     const referralCode = codeResult.rows[0];
     let fraudScore = 0;
     if (botPattern.test(userAgent)) fraudScore += 50;
-    if (eventType === 'conversion' && !orderId) fraudScore += 20;
-
     await query(
-      `INSERT INTO referral_events (code_id, event_type, user_ip_hash, referrer, order_id, metadata, fraud_score)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [referralCode.id, eventType, ipHash, referrer || null, orderId || null, JSON.stringify(parseMetadata(metadata)), fraudScore]
+      `INSERT INTO referral_events (code_id, event_type, user_ip_hash, referrer, order_id, metadata, fraud_score, retention_expires_at)
+       VALUES ($1, $2, $3, $4, NULL, $5, $6, NOW() + ($7 * INTERVAL '1 day'))`,
+      [referralCode.id, eventType, ipHash, referrer || null, JSON.stringify(parseMetadata(metadata)), fraudScore, retentionDays()]
     );
 
     const uniqueClickerResult = await query(
@@ -242,28 +225,45 @@ router.post('/event', async (req, res, next) => {
 
     await query(
       `UPDATE referral_codes
-       SET usage_count = CASE WHEN $2 = 'conversion' THEN usage_count + 1 ELSE usage_count END,
-           conversion_count = CASE WHEN $2 = 'conversion' THEN conversion_count + 1 ELSE conversion_count END,
-           unique_clickers = $3,
-           safety_flags = CASE WHEN $4 > 0 THEN safety_flags || jsonb_build_array('suspicious-activity') ELSE safety_flags END,
+       SET unique_clickers = $2,
+           safety_flags = CASE WHEN $3 > 0 THEN safety_flags || jsonb_build_array('suspicious-activity') ELSE safety_flags END,
            updated_at = NOW()
        WHERE id = $1`,
-      [referralCode.id, eventType, uniqueClickerResult.rows[0].count, fraudScore]
+      [referralCode.id, uniqueClickerResult.rows[0].count, fraudScore]
     );
-
-    const performance = await updateSponsorPerformanceByCode(referralCode.id);
 
     return res.status(201).json({
       message: 'Referral event recorded.',
       fraudScore,
-      performance,
     });
   } catch (error) {
     return next(error);
   }
 });
 
-router.get('/:code/stats', async (req, res, next) => {
+router.post('/acceptance', requireRewards, authenticateToken, requireAdmin, async (req, res, next) => {
+  try {
+    const result = await withTransaction((client) => recordVerifiedInviteAcceptance(client, {
+      code: req.body.code,
+      recipientReference: req.body.recipientReference,
+    }));
+    if (!result) {
+      return res.status(404).json({ error: 'Eligible consented referral code not found.' });
+    }
+    return res.status(result.duplicate ? 200 : 201).json({
+      accepted: true,
+      duplicate: result.duplicate,
+      sponsorId: result.sponsorId,
+    });
+  } catch (error) {
+    if (error.message.includes('required')) {
+      return res.status(400).json({ error: error.message });
+    }
+    return next(error);
+  }
+});
+
+router.get('/:code/stats', requireRewards, authenticateToken, async (req, res, next) => {
   try {
     const code = req.params.code;
     const codeResult = await query(
@@ -276,6 +276,9 @@ router.get('/:code/stats', async (req, res, next) => {
 
     if (!codeResult.rowCount) {
       return res.status(404).json({ error: 'Referral code not found.' });
+    }
+    if (!req.user.isOperator && req.user.sponsorId !== codeResult.rows[0].sponsor_id) {
+      return res.status(403).json({ error: 'You do not have access to these referral statistics.' });
     }
 
     const statsResult = await query(
