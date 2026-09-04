@@ -1,11 +1,7 @@
 const express = require('express');
 const { query, withTransaction } = require('../config/database');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const {
-  calculateCustomizationPrice,
-  positiveInteger,
-  toFulfillmentCustomization,
-} = require('../utils/product');
+const { normalizeOrderItems, priceAndReserveItems } = require('../services/orderPricing');
 const {
   allowedShopifyTopics,
   isPaidOrder,
@@ -17,6 +13,7 @@ const {
 } = require('../services/shopifyWebhook');
 const {
   recordVerifiedShopifyConversion,
+  hashRewardIdentity,
   reverseVerifiedShopifyConversion,
   rewardsEnabled,
 } = require('../services/rewards');
@@ -24,69 +21,10 @@ const { approvedRewardsPrivacyNoticeVersion } = require('../config/environment')
 
 const router = express.Router();
 
-function normalizeItems(items) {
-  if (!Array.isArray(items) || !items.length) {
-    throw new Error('At least one order item is required.');
-  }
-  return items.map((item) => ({
-    productId: item.productId,
-    variantId: item.variantId || null,
-    quantity: positiveInteger(item.quantity),
-    customization: item.customization || null,
-  }));
-}
-
-async function calculateTotals(items, discountApplied) {
-  let subtotal = 0;
-  const normalizedItems = [];
-  for (const item of items) {
-    const productResult = await query(
-      `SELECT id, name, final_price, markup_percent, print_methods, customization_options, requires_signature_branding
-       FROM products
-       WHERE id = $1 AND active = true`,
-      [item.productId]
-    );
-    if (!productResult.rowCount) {
-      throw new Error(`Active product ${item.productId} not found.`);
-    }
-    const product = productResult.rows[0];
-    const variants = await query(
-      `SELECT id, title, sku, price, inventory_count
-       FROM product_variants
-       WHERE product_id = $1 AND active = true`,
-      [product.id]
-    );
-    let variant = null;
-    if (item.variantId) {
-      variant = variants.rows.find((candidate) => candidate.id === item.variantId);
-      if (!variant) {
-        throw new Error(`Variant ${item.variantId} is not available for product ${item.productId}.`);
-      }
-    } else if (variants.rowCount) {
-      throw new Error(`A variant is required for product ${item.productId}.`);
-    }
-    const pricing = calculateCustomizationPrice(product, item.customization || {}, variant);
-    const unitPrice = pricing.finalPrice;
-    const lineTotal = unitPrice * item.quantity;
-    subtotal += lineTotal;
-    normalizedItems.push({
-      productId: item.productId,
-      variantId: item.variantId,
-      quantity: item.quantity,
-      customization: toFulfillmentCustomization(item.customization || {}, pricing.mandatoryBranding),
-      productName: product.name,
-      unitPrice: Number(unitPrice.toFixed(2)),
-      lineTotal: Number(lineTotal.toFixed(2)),
-      pricing,
-    });
-  }
-
-  const total = Math.max(subtotal - subtotal * (Number(discountApplied) || 0), 0);
-  return {
-    subtotal: Number(subtotal.toFixed(2)),
-    total: Number(total.toFixed(2)),
-    items: normalizedItems,
-  };
+function sanitizeOrder(row) {
+  if (!row) return null;
+  const { customer_identity_hash, ...order } = row;
+  return order;
 }
 
 router.post('/', authenticateToken, async (req, res, next) => {
@@ -100,28 +38,27 @@ router.post('/', authenticateToken, async (req, res, next) => {
       return res.status(403).json({ error: 'You do not have access to create orders for this sponsor.' });
     }
 
-    const normalizedItems = normalizeItems(items);
-    let discountApplied = 0;
-
-    if (sponsorId && rewardsEnabled()) {
-      const sponsorResult = await query(
-        `SELECT discount_earned
-         FROM sponsors
-         WHERE id = $1
-           AND rewards_consent = true
-           AND rewards_consent_at IS NOT NULL
-           AND rewards_consent_withdrawn_at IS NULL
-           AND privacy_notice_version = $2`,
-        [sponsorId, approvedRewardsPrivacyNoticeVersion()]
-      );
-      if (sponsorResult.rowCount) {
-        discountApplied = Number(sponsorResult.rows[0].discount_earned || 0);
-      }
-    }
-
-    const totals = await calculateTotals(normalizedItems, discountApplied);
+    const normalizedItems = normalizeOrderItems(items);
 
     const order = await withTransaction(async (client) => {
+      let discountApplied = 0;
+      if (sponsorId && rewardsEnabled()) {
+        const sponsorResult = await client.query(
+          `SELECT discount_earned
+           FROM sponsors
+           WHERE id = $1
+             AND rewards_consent = true
+             AND rewards_consent_at IS NOT NULL
+             AND rewards_consent_withdrawn_at IS NULL
+             AND privacy_notice_version = $2
+           FOR UPDATE`,
+          [sponsorId, approvedRewardsPrivacyNoticeVersion()]
+        );
+        if (sponsorResult.rowCount) {
+          discountApplied = Number(sponsorResult.rows[0].discount_earned || 0);
+        }
+      }
+      const totals = await priceAndReserveItems(client, normalizedItems, discountApplied);
       const insertResult = await client.query(
         `INSERT INTO orders (sponsor_id, shopify_order_id, printful_order_id, customer_name, customer_email, items, subtotal, discount_applied, total, customization_data, referral_code_used)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11)
@@ -144,9 +81,9 @@ router.post('/', authenticateToken, async (req, res, next) => {
       return insertResult.rows[0];
     });
 
-    return res.status(201).json({ order });
+    return res.status(201).json({ order: sanitizeOrder(order) });
   } catch (error) {
-    if (['required', 'not found', 'not available', 'positive integer'].some((value) => error.message.includes(value))) {
+    if (['required', 'not found', 'not available', 'positive integer', 'Insufficient inventory'].some((value) => error.message.includes(value))) {
       return res.status(400).json({ error: error.message });
     }
     return next(error);
@@ -164,7 +101,7 @@ router.get('/:id', authenticateToken, async (req, res, next) => {
       return res.status(403).json({ error: 'You do not have access to this order.' });
     }
 
-    return res.json({ order: result.rows[0] });
+    return res.json({ order: sanitizeOrder(result.rows[0]) });
   } catch (error) {
     return next(error);
   }
@@ -197,7 +134,7 @@ router.put('/:id/status', authenticateToken, requireAdmin, async (req, res, next
       return res.status(404).json({ error: 'Order not found.' });
     }
 
-    return res.json({ order: result.rows[0] });
+    return res.json({ order: sanitizeOrder(result.rows[0]) });
   } catch (error) {
     return next(error);
   }
@@ -225,7 +162,7 @@ router.get('/', authenticateToken, async (req, res, next) => {
 
     const sql = `SELECT * FROM orders ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY created_at DESC`;
     const result = await query(sql, values);
-    return res.json({ orders: result.rows });
+    return res.json({ orders: result.rows.map(sanitizeOrder) });
   } catch (error) {
     return next(error);
   }
@@ -329,13 +266,17 @@ router.post('/webhook/shopify', async (req, res, next) => {
       }
 
       const shopifyOrderId = String(payload.id);
+      const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
+      const customerIdentityHash = rewardsEnabled() && shopifyCustomerId
+        ? hashRewardIdentity('shopify', shopifyCustomerId)
+        : null;
       const referralCode = payload.note_attributes?.find?.((attribute) => attribute.name === 'referral_code')?.value || null;
       const subtotal = Number(payload.subtotal_price || payload.current_subtotal_price || 0);
       const total = Number(payload.total_price || subtotal);
       const orderResult = await client.query(
         `INSERT INTO orders
-           (shopify_order_id, customer_name, customer_email, items, subtotal, total, customization_data, fulfillment_status, tracking_number, referral_code_used)
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10)
+           (shopify_order_id, customer_name, customer_email, items, subtotal, total, customization_data, fulfillment_status, tracking_number, referral_code_used, customer_identity_hash)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11)
          ON CONFLICT (shopify_order_id) DO UPDATE
          SET customer_name = EXCLUDED.customer_name,
              customer_email = EXCLUDED.customer_email,
@@ -350,6 +291,7 @@ router.post('/webhook/shopify', async (req, res, next) => {
              END,
              tracking_number = COALESCE(EXCLUDED.tracking_number, orders.tracking_number),
              referral_code_used = EXCLUDED.referral_code_used,
+             customer_identity_hash = EXCLUDED.customer_identity_hash,
              updated_at = NOW()
          RETURNING *`,
         [
@@ -369,6 +311,7 @@ router.post('/webhook/shopify', async (req, res, next) => {
           mapOrderFulfillmentStatus(payload.fulfillment_status),
           payload.fulfillments?.[0]?.tracking_number || null,
           referralCode,
+          customerIdentityHash,
         ]
       );
       const pendingFulfillment = await client.query(
@@ -402,6 +345,9 @@ router.post('/webhook/shopify', async (req, res, next) => {
         reward = await recordVerifiedShopifyConversion(client, {
           code: referralCode,
           orderId: shopifyOrderId,
+          purchaserIdentity: shopifyCustomerId
+            ? { provider: 'shopify', subject: shopifyCustomerId }
+            : null,
         });
         if (reward?.sponsorId) {
           await client.query('UPDATE orders SET sponsor_id = $2 WHERE shopify_order_id = $1', [
@@ -416,10 +362,13 @@ router.post('/webhook/shopify', async (req, res, next) => {
         order: orderResult.rows[0],
         synced: true,
         kind,
-        rewardChanged: Boolean(reward && !reward.duplicate),
+        rewardChanged: Boolean(reward && !reward.duplicate && !reward.rejected),
       };
     });
-    return res.status(kind === 'order' ? 201 : 200).json(result);
+    return res.status(kind === 'order' ? 201 : 200).json({
+      ...result,
+      order: sanitizeOrder(result.order),
+    });
   } catch (error) {
     if (eventId) {
       await query(

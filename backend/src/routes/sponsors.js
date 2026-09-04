@@ -7,6 +7,9 @@ const { generateUniqueReferralCode } = require('../utils/referralCode');
 const { calculateEffortScore, applyTierDiscountCap } = require('../utils/effortScore');
 const { clearSessionCookies, setSessionCookies } = require('../middleware/security');
 const {
+  hashRewardIdentity,
+} = require('../services/rewards');
+const {
   approvedRewardsPrivacyNoticeVersion,
   rewardsEnabled,
   selfRegistrationEnabled,
@@ -20,7 +23,7 @@ function isEmail(value) {
 
 function sanitizeSponsor(row) {
   if (!row) return null;
-  const { password_hash, ...sponsor } = row;
+  const { password_hash, reward_identity_hash, ...sponsor } = row;
   return sponsor;
 }
 
@@ -129,6 +132,44 @@ router.put('/me/consent', authenticateToken, async (req, res, next) => {
     });
     return res.json({ sponsor: sanitizeSponsor(sponsor) });
   } catch (error) {
+    return next(error);
+  }
+});
+
+router.put('/:id/reward-identity', authenticateToken, async (req, res, next) => {
+  try {
+    if (!req.user.isOperator) {
+      return res.status(403).json({ error: 'Admin access is required.' });
+    }
+    if (String(req.body.provider || '').toLowerCase() !== 'shopify' || !req.body.subject) {
+      return res.status(400).json({ error: 'A server-verified Shopify customer subject is required.' });
+    }
+    let identityHash;
+    try {
+      identityHash = hashRewardIdentity('shopify', req.body.subject);
+    } catch (error) {
+      if (error.message.includes('Shopify identity')) {
+        return res.status(400).json({ error: error.message });
+      }
+      throw error;
+    }
+    const result = await query(
+      `UPDATE sponsors
+       SET reward_identity_hash = $2,
+           reward_identity_bound_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, identityHash]
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ error: 'Sponsor not found.' });
+    }
+    return res.json({ sponsor: sanitizeSponsor(result.rows[0]), rewardIdentityBound: true });
+  } catch (error) {
+    if (error.code === '23505' && error.constraint === 'idx_sponsors_reward_identity') {
+      return res.status(409).json({ error: 'That Shopify customer identity is already bound to a rewards account.' });
+    }
     return next(error);
   }
 });

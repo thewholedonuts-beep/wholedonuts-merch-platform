@@ -35,7 +35,7 @@ function parseMetadata(value) {
 
 router.post('/validate', requireAnalytics, referralValidationLimiter, async (req, res, next) => {
   try {
-    const { code, sponsorId, customerEmail } = req.body;
+    const { code } = req.body;
     const userAgent = req.get('user-agent') || '';
     const ipHash = hashIp(req.ip);
 
@@ -72,11 +72,6 @@ router.post('/validate', requireAnalytics, referralValidationLimiter, async (req
       result = 'fail';
     }
 
-    if (sponsorId && sponsorId === referralCode.sponsor_id) {
-      reasons.push('Sponsors cannot redeem their own referral codes.');
-      result = 'fail';
-    }
-
     if (botPattern.test(userAgent)) {
       reasons.push('Suspicious user agent detected.');
       result = 'flagged';
@@ -110,39 +105,6 @@ router.post('/validate', requireAnalytics, referralValidationLimiter, async (req
       result = 'fail';
     }
 
-    if (customerEmail) {
-      const dualInviteResult = await query(
-        `SELECT referral_code_used
-         FROM orders
-         WHERE LOWER(customer_email) = LOWER($1)
-           AND referral_code_used IS NOT NULL
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [customerEmail]
-      );
-
-      if (dualInviteResult.rowCount && dualInviteResult.rows[0].referral_code_used !== code) {
-        reasons.push('Customer already redeemed a different sponsor code.');
-        result = 'flagged';
-      }
-    }
-
-    if (sponsorId) {
-      const loopResult = await query(
-        `SELECT 1
-         FROM orders
-         WHERE sponsor_id = $1
-           AND referral_code_used = $2
-         LIMIT 1`,
-        [referralCode.sponsor_id, code]
-      );
-
-      if (loopResult.rowCount) {
-        reasons.push('Referral loop detected between sponsors.');
-        result = 'flagged';
-      }
-    }
-
     const recentFailures = await query(
       `SELECT COUNT(*)::int AS attempts
        FROM code_validations
@@ -172,7 +134,7 @@ router.post('/validate', requireAnalytics, referralValidationLimiter, async (req
     );
 
     if (result === 'pass') {
-      return res.json({ valid: true, codeId: referralCode.id, sponsorId: referralCode.sponsor_id });
+      return res.json({ valid: true, rewardPendingVerifiedIdentity: true });
     }
 
     return res.status(result === 'flagged' ? 403 : 400).json({ valid: false, reason: reasons.join(' '), flagged: result === 'flagged' });
@@ -245,15 +207,24 @@ router.post('/acceptance', requireRewards, authenticateToken, requireAdmin, asyn
   try {
     const result = await withTransaction((client) => recordVerifiedInviteAcceptance(client, {
       code: req.body.code,
-      recipientReference: req.body.recipientReference,
+      recipientIdentity: req.body.recipientIdentity,
     }));
     if (!result) {
       return res.status(404).json({ error: 'Eligible consented referral code not found.' });
+    }
+    if (result.rejected) {
+      return res.status(403).json({
+        accepted: false,
+        duplicate: false,
+        sponsorId: null,
+        rejected: result.rejected,
+      });
     }
     return res.status(result.duplicate ? 200 : 201).json({
       accepted: true,
       duplicate: result.duplicate,
       sponsorId: result.sponsorId,
+      rejected: null,
     });
   } catch (error) {
     if (error.message.includes('required')) {

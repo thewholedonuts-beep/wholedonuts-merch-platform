@@ -18,6 +18,33 @@ function isPublicReferralEventType(eventType) {
   return PUBLIC_REFERRAL_EVENT_TYPES.has(eventType);
 }
 
+function hashRewardIdentity(provider, subject) {
+  const salt = process.env.REWARD_REFERENCE_SALT;
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  let normalizedSubject = String(subject || '').trim();
+  if (normalizedProvider === 'shopify') {
+    const shopifySubject = normalizedSubject.match(/^(?:gid:\/\/shopify\/Customer\/)?(\d+)$/i);
+    if (!shopifySubject) {
+      throw new Error('The verified Shopify identity must be a Shopify customer ID.');
+    }
+    normalizedSubject = BigInt(shopifySubject[1]).toString();
+  }
+  if (!salt || !normalizedProvider || !normalizedSubject) {
+    throw new Error('A verified identity provider, subject, and REWARD_REFERENCE_SALT are required.');
+  }
+  return crypto
+    .createHmac('sha256', salt)
+    .update(`${normalizedProvider}:${normalizedSubject}`)
+    .digest('hex');
+}
+
+async function lockShopifyOrder(client, orderId) {
+  await client.query(
+    'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+    [`shopify-order:${String(orderId)}`]
+  );
+}
+
 async function updateSponsorPerformance(client, sponsorId) {
   const metricsResult = await client.query(
     `SELECT COALESCE(MAX(rc.usage_count), 0) AS usage_count,
@@ -58,9 +85,15 @@ async function updateSponsorPerformance(client, sponsorId) {
   return { ...effort, ...tierState };
 }
 
-async function recordVerifiedShopifyConversion(client, { code, orderId }) {
+async function recordVerifiedShopifyConversion(client, { code, orderId, purchaserIdentity }) {
   if (!rewardsEnabled()) return null;
-  if (!code || !orderId) return null;
+  if (
+    !code
+    || !orderId
+    || String(purchaserIdentity?.provider || '').toLowerCase() !== 'shopify'
+    || !purchaserIdentity?.subject
+  ) return null;
+  await lockShopifyOrder(client, orderId);
   const pendingReversal = await client.query(
     'SELECT 1 FROM pending_shopify_reward_reversals WHERE shopify_order_id = $1',
     [String(orderId)]
@@ -76,7 +109,7 @@ async function recordVerifiedShopifyConversion(client, { code, orderId }) {
     return { sponsorId: existingLedger.rows[0].sponsor_id, duplicate: true };
   }
   const codeResult = await client.query(
-    `SELECT rc.id, rc.sponsor_id
+    `SELECT rc.id, rc.sponsor_id, s.reward_identity_hash
      FROM referral_codes rc
      JOIN sponsors s ON s.id = rc.sponsor_id
      WHERE rc.code_string = $1
@@ -85,12 +118,20 @@ async function recordVerifiedShopifyConversion(client, { code, orderId }) {
        AND s.rewards_consent = true
        AND s.rewards_consent_at IS NOT NULL
        AND s.rewards_consent_withdrawn_at IS NULL
-       AND s.privacy_notice_version = $2`,
+       AND s.privacy_notice_version = $2
+       AND s.reward_identity_hash IS NOT NULL`,
     [code, approvedRewardsPrivacyNoticeVersion()]
   );
   if (!codeResult.rowCount) return null;
 
   const referral = codeResult.rows[0];
+  const purchaserIdentityHash = hashRewardIdentity(
+    purchaserIdentity.provider,
+    purchaserIdentity.subject
+  );
+  if (purchaserIdentityHash === referral.reward_identity_hash) {
+    return { sponsorId: null, duplicate: false, rejected: 'self-referral' };
+  }
   const inserted = await client.query(
     `INSERT INTO referral_events
        (code_id, event_type, order_id, metadata, fraud_score, retention_expires_at)
@@ -144,20 +185,20 @@ async function recordVerifiedShopifyConversion(client, { code, orderId }) {
 }
 
 function hashRecipientReference(reference) {
-  const salt = process.env.REWARD_REFERENCE_SALT;
-  if (!salt) {
-    throw new Error('REWARD_REFERENCE_SALT must be configured before recording invite acceptance.');
-  }
-  return crypto.createHmac('sha256', salt).update(String(reference)).digest('hex');
+  return hashRewardIdentity(reference.provider, reference.subject);
 }
 
-async function recordVerifiedInviteAcceptance(client, { code, recipientReference }) {
+async function recordVerifiedInviteAcceptance(client, { code, recipientIdentity }) {
   if (!rewardsEnabled()) return null;
-  if (!code || !recipientReference) {
-    throw new Error('Referral code and recipient reference are required.');
+  if (
+    !code
+    || String(recipientIdentity?.provider || '').toLowerCase() !== 'shopify'
+    || !recipientIdentity?.subject
+  ) {
+    throw new Error('Referral code and a server-verified Shopify recipient identity are required.');
   }
   const codeResult = await client.query(
-    `SELECT rc.id, rc.sponsor_id
+    `SELECT rc.id, rc.sponsor_id, s.reward_identity_hash
      FROM referral_codes rc
      JOIN sponsors s ON s.id = rc.sponsor_id
      WHERE rc.code_string = $1
@@ -166,13 +207,17 @@ async function recordVerifiedInviteAcceptance(client, { code, recipientReference
        AND s.rewards_consent = true
        AND s.rewards_consent_at IS NOT NULL
        AND s.rewards_consent_withdrawn_at IS NULL
-       AND s.privacy_notice_version = $2`,
+       AND s.privacy_notice_version = $2
+       AND s.reward_identity_hash IS NOT NULL`,
     [code, approvedRewardsPrivacyNoticeVersion()]
   );
   if (!codeResult.rowCount) return null;
 
   const referral = codeResult.rows[0];
-  const sourceReference = hashRecipientReference(recipientReference);
+  const sourceReference = hashRecipientReference(recipientIdentity);
+  if (sourceReference === referral.reward_identity_hash) {
+    return { sponsorId: null, duplicate: false, rejected: 'self-referral' };
+  }
   const inserted = await client.query(
     `INSERT INTO reward_ledger
        (sponsor_id, referral_code_id, event_type, source_reference, points_delta, metadata, retention_expires_at)
@@ -205,6 +250,7 @@ async function recordVerifiedInviteAcceptance(client, { code, recipientReference
 }
 
 async function reverseVerifiedShopifyConversion(client, orderId) {
+  await lockShopifyOrder(client, orderId);
   const original = await client.query(
     `SELECT id, sponsor_id, referral_code_id, points_delta
      FROM reward_ledger
@@ -256,6 +302,7 @@ async function reverseVerifiedShopifyConversion(client, orderId) {
 }
 
 module.exports = {
+  hashRewardIdentity,
   isPublicReferralEventType,
   recordVerifiedShopifyConversion,
   recordVerifiedInviteAcceptance,

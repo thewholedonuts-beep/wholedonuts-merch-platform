@@ -57,12 +57,17 @@ Whole Donuts LLC is not a nonprofit. Keep voluntary support records separate fro
 
 1. Create the private managed PostgreSQL instance with encryption, point-in-time recovery, and a dedicated least-privilege application role. Use a distinct migration role where the provider supports it.
 2. Configure API runtime secrets and frontend build-time API URL. Do not commit `.env` files or expose API/service tokens in browser variables.
-3. Run `npm run migrate` as a one-off release command against the target database. Confirm `pgcrypto` can be installed and all three migrations complete before starting new application versions.
+3. Run `npm run migrate` as a one-off release command against the target database. Confirm `pgcrypto` can be installed and all four migrations complete before starting new application versions.
 4. Deploy the API, wait for `/ready`, then deploy the dashboard. Configure the provider scheduler to run the metric refresh command once each hour.
 5. Configure custom domains, DNS, and managed TLS. Restrict CORS to the deployed dashboard origin.
 6. Register Shopify webhooks only after the API is healthy; complete the Shopify and enabled fulfillment-provider release checks.
 7. Run operator connectivity and catalog reconciliation for both enabled providers. Assign and verify one provider/product mapping for every active item.
 8. Schedule deletion or minimization of expired referral, validation, integration-event, and reward-ledger records according to [the retention policy](DATA_RETENTION.md).
+9. Bind each consenting rewards sponsor to a verified Shopify customer ID through the operator-only `PUT /api/sponsors/:id/reward-identity` endpoint. Unbound sponsors cannot earn purchase or acceptance rewards.
+10. Reconcile inventory before activation. Product inventory is the aggregate sales cap and each active variant has its own cap; both are transactionally decremented for variant orders.
+
+For local concurrency validation, set `TEST_DATABASE_URL` to a migrated disposable PostgreSQL
+database before running `npm test`. CI provisions PostgreSQL 16 and runs this path automatically.
 
 ## Rollback and operations
 
