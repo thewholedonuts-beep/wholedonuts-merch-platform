@@ -8,6 +8,10 @@ function keyedIdentifier(value) {
   return crypto.createHmac('sha256', salt).update(String(value).trim().toLowerCase()).digest('hex');
 }
 
+function ipRateLimitKey(req) {
+  return keyedIdentifier(`ip:${ipKeyGenerator(req.ip, 56)}`);
+}
+
 function accountIdentifier(req) {
   return req.user?.sponsorId
     || (req.user?.isOperator && req.headers['x-operator-key'])
@@ -32,7 +36,7 @@ function ipLimiter({ limit, message, windowMs = FIFTEEN_MINUTES }) {
     limit,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    keyGenerator: (req) => ipKeyGenerator(req.ip, 56),
+    keyGenerator: ipRateLimitKey,
     message: { error: message },
   });
 }
@@ -115,6 +119,7 @@ module.exports = {
   accountRateLimitKey,
   checkoutLimiters,
   generalApiLimiter,
+  ipRateLimitKey,
   loginLimiters,
   referralRateLimitKey,
   referralLimiters,
