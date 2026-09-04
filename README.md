@@ -1,6 +1,6 @@
 # Whole Donuts Merch Platform
 
-Private sponsor merchandise operations built with a Next.js dashboard, Express API, PostgreSQL, Shopify, and Printful/Printify fulfillment. Shopify is the public checkout and order system of record; PostgreSQL stores Whole Donuts sponsor, consent, referral, reward-ledger, and operational data.
+Private sponsor merchandise operations built with a Next.js dashboard, Express API, PostgreSQL, Shopify, and Printful fulfillment. Shopify is the public checkout and order system of record; PostgreSQL stores Whole Donuts sponsor, consent, referral, reward-ledger, and operational data. Printify remains a disabled future adapter, not a launch provider.
 
 ## Launch status
 
@@ -45,7 +45,8 @@ Run the metric refresh from one provider scheduler, not from each API instance.
 ## Commerce integration
 
 - [Shopify setup](docs/SHOPIFY_SETUP.md) covers the custom app, scopes, verified webhook topics, and callback URL.
-- [Fulfillment provider setup](docs/FULFILLMENT_PROVIDERS.md) covers Printful and Printify credentials, product mapping, and reconciliation.
+- [Shopify + Printful launch](docs/SHOPIFY_PRINTFUL_LAUNCH.md) is the authoritative account, secrets, policy, mapping, workflow, and paid test-order checklist.
+- [Fulfillment provider setup](docs/FULFILLMENT_PROVIDERS.md) records the Printful-only launch boundary and future Printify gate.
 - `POST /api/orders/webhook/shopify` accepts only configured topics with a valid Shopify HMAC and webhook delivery ID. Replayed deliveries are acknowledged without reprocessing.
 - `GET /api/fulfillment/:provider/status` and `POST /api/fulfillment/:provider/reconcile-catalog` are operator-only provider checks. Do not expose integration tokens to the frontend.
 

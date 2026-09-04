@@ -5,6 +5,7 @@ const {
   positiveInteger,
   toConsumerProduct,
   toFulfillmentCustomization,
+  validateFulfillmentMappingPayload,
   validateFulfillmentProvider,
 } = require('../src/utils/product');
 
@@ -89,4 +90,44 @@ test('fulfillment provider selection is explicit', () => {
   assert.equal(validateFulfillmentProvider('PRINTFUL'), 'printful');
   assert.equal(validateFulfillmentProvider('printify'), 'printify');
   assert.throws(() => validateFulfillmentProvider('other'), /printful or printify/);
+});
+
+test('fulfillment mapping normalizes IDs and rejects duplicate variants', () => {
+  assert.deepEqual(validateFulfillmentMappingPayload({
+    fulfillmentProductId: 201,
+    variants: [{
+      variantId: 'variant-1',
+      fulfillmentVariantId: 401,
+      brandingFileId: 501,
+      brandingPlacement: 'sleeve_left',
+    }],
+  }), {
+    fulfillmentProductId: '201',
+    variants: [{
+      variantId: 'variant-1',
+      fulfillmentVariantId: '401',
+      brandingFileId: '501',
+      brandingPlacement: 'sleeve_left',
+    }],
+  });
+  assert.throws(
+    () => validateFulfillmentMappingPayload({
+      fulfillmentProductId: '201',
+      variants: [
+        {
+          variantId: 'variant-1',
+          fulfillmentVariantId: '401',
+          brandingFileId: '501',
+          brandingPlacement: 'sleeve_left',
+        },
+        {
+          variantId: 'variant-1',
+          fulfillmentVariantId: '402',
+          brandingFileId: '502',
+          brandingPlacement: 'sleeve_left',
+        },
+      ],
+    }),
+    /Duplicate variant mapping/
+  );
 });

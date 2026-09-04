@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { query, withTransaction } = require('../config/database');
 const { authenticateToken, requireSponsorAccess } = require('../middleware/auth');
 const { generateUniqueReferralCode } = require('../utils/referralCode');
+const { loginLimiters, registrationLimiters, sensitiveAccountLimiters } = require('../middleware/rateLimiter');
 const { calculateEffortScore, applyTierDiscountCap } = require('../utils/effortScore');
 const { clearSessionCookies, setSessionCookies } = require('../middleware/security');
 const {
@@ -27,7 +28,7 @@ function sanitizeSponsor(row) {
   return sponsor;
 }
 
-router.post('/register', async (req, res, next) => {
+router.post('/register', ...registrationLimiters, async (req, res, next) => {
   if (!selfRegistrationEnabled()) {
     return res.status(403).json({ error: 'Sponsor self-registration is not available.' });
   }
@@ -98,7 +99,7 @@ router.post('/register', async (req, res, next) => {
   }
 });
 
-router.put('/me/consent', authenticateToken, async (req, res, next) => {
+router.put('/me/consent', authenticateToken, ...sensitiveAccountLimiters, async (req, res, next) => {
   try {
     if (!req.user.sponsorId) {
       return res.status(403).json({ error: 'Sponsor access is required.' });
@@ -136,7 +137,7 @@ router.put('/me/consent', authenticateToken, async (req, res, next) => {
   }
 });
 
-router.put('/:id/reward-identity', authenticateToken, async (req, res, next) => {
+router.put('/:id/reward-identity', authenticateToken, ...sensitiveAccountLimiters, async (req, res, next) => {
   try {
     if (!req.user.isOperator) {
       return res.status(403).json({ error: 'Admin access is required.' });
@@ -174,7 +175,7 @@ router.put('/:id/reward-identity', authenticateToken, async (req, res, next) => 
   }
 });
 
-router.post('/login', async (req, res, next) => {
+router.post('/login', ...loginLimiters, async (req, res, next) => {
   try {
     const { email, password } = req.body;
 

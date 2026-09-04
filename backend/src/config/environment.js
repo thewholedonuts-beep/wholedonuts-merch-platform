@@ -27,6 +27,13 @@ function fulfillmentProviders() {
     .filter(Boolean);
 }
 
+function shopifyWebhookTopics() {
+  return String(process.env.SHOPIFY_WEBHOOK_TOPICS || '')
+    .split(',')
+    .map((topic) => topic.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function parseOrigins(value) {
   const origins = String(value || '')
     .split(',')
@@ -75,13 +82,16 @@ function validateProductionEnvironment() {
     'SHOPIFY_API_VERSION',
     'SHOPIFY_ACCESS_TOKEN',
     'SHOPIFY_WEBHOOK_SECRET',
+    'SHOPIFY_WEBHOOK_TOPICS',
+    'PUBLIC_API_URL',
+    'RATE_LIMIT_KEY_SALT',
   ];
   const providers = fulfillmentProviders();
   if (!providers.length || providers.some((provider) => !['printful', 'printify'].includes(provider))) {
     throw new Error('FULFILLMENT_PROVIDERS must contain printful, printify, or both.');
   }
   if (providers.includes('printful')) {
-    required.push('PRINTFUL_API_KEY');
+    required.push('PRINTFUL_API_KEY', 'PRINTFUL_STORE_ID');
   }
   if (providers.includes('printify')) {
     required.push('PRINTIFY_API_KEY', 'PRINTIFY_SHOP_ID');
@@ -98,7 +108,7 @@ function validateProductionEnvironment() {
     throw new Error(`Missing required production environment variables: ${missing.join(', ')}`);
   }
 
-  const minimumLengthSecrets = ['JWT_SECRET', 'OPERATOR_API_KEY'];
+  const minimumLengthSecrets = ['JWT_SECRET', 'OPERATOR_API_KEY', 'RATE_LIMIT_KEY_SALT'];
   if (referralAnalyticsEnabled()) {
     minimumLengthSecrets.push('IP_HASH_SALT');
   }
@@ -121,9 +131,41 @@ function validateProductionEnvironment() {
     throw new Error('SHOPIFY_API_VERSION must be a supported YYYY-MM stable API version.');
   }
 
+  let publicApiUrl;
+  try {
+    publicApiUrl = new URL(process.env.PUBLIC_API_URL);
+  } catch {
+    throw new Error('PUBLIC_API_URL must be a valid HTTPS origin without a path, query, or fragment.');
+  }
+  if (publicApiUrl.protocol !== 'https:' || publicApiUrl.origin !== publicApiUrl.href.replace(/\/$/, '')) {
+    throw new Error('PUBLIC_API_URL must be an HTTPS origin without a path, query, or fragment.');
+  }
+
+  const requiredWebhookTopics = [
+    'orders/create',
+    'orders/updated',
+    'fulfillments/create',
+    'fulfillments/update',
+  ];
+  const configuredWebhookTopics = shopifyWebhookTopics();
+  const invalidWebhookTopics = configuredWebhookTopics.filter((topic) => !requiredWebhookTopics.includes(topic));
+  const missingWebhookTopics = requiredWebhookTopics.filter((topic) => !configuredWebhookTopics.includes(topic));
+  if (
+    invalidWebhookTopics.length
+    || missingWebhookTopics.length
+    || new Set(configuredWebhookTopics).size !== requiredWebhookTopics.length
+  ) {
+    throw new Error(
+      `SHOPIFY_WEBHOOK_TOPICS must contain exactly: ${requiredWebhookTopics.join(', ')}.`
+    );
+  }
+
   const defaultProvider = String(process.env.DEFAULT_FULFILLMENT_PROVIDER || providers[0]).toLowerCase();
-  if (!providers.includes(defaultProvider)) {
-    throw new Error('DEFAULT_FULFILLMENT_PROVIDER must be included in FULFILLMENT_PROVIDERS.');
+  if (!providers.includes('printful') || defaultProvider !== 'printful') {
+    throw new Error('Production fulfillment must include printful and DEFAULT_FULFILLMENT_PROVIDER must be printful.');
+  }
+  if (providers.includes('printify') && process.env.ALLOW_PRINTIFY_FULFILLMENT !== 'true') {
+    throw new Error('Printify is not enabled for launch. Set ALLOW_PRINTIFY_FULFILLMENT=true only after a separate provider review.');
   }
 }
 
@@ -141,6 +183,7 @@ function trustProxySetting() {
 module.exports = {
   frontendOrigins,
   fulfillmentProviders,
+  shopifyWebhookTopics,
   approvedRewardsPrivacyNoticeVersion,
   isProduction,
   referralAnalyticsEnabled,

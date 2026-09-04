@@ -26,7 +26,9 @@ The frontend API base URL is public and baked into the frontend build. Every oth
 |---|---|
 | `DATABASE_URL` | Managed private PostgreSQL TLS connection string |
 | `FRONTEND_URLS` | Comma-separated exact dashboard origins, such as `https://<merch-domain>` |
+| `PUBLIC_API_URL` | Exact public HTTPS API origin, without a path |
 | `JWT_SECRET`, `OPERATOR_API_KEY` | Two distinct cryptographically random values, each at least 32 characters |
+| `RATE_LIMIT_KEY_SALT` | A third distinct random value of at least 32 characters for keyed account rate-limit identifiers |
 | `ALLOW_SPONSOR_SELF_REGISTRATION` | Keep `false` unless the owner has approved a public account-creation flow |
 | `REFERRAL_ANALYTICS_ENABLED` | Keep `false` unless the owner has approved the referral collection purpose, notice, retention, and access controls |
 | `CRUMB_SAVER_REWARDS_ENABLED` | Keep `false` until trusted acceptance callbacks and paid-order reward rules are approved |
@@ -39,10 +41,9 @@ The frontend API base URL is public and baked into the frontend build. Every oth
 | `SHOPIFY_API_VERSION` | Supported stable Shopify Admin API version, such as `2026-07` |
 | `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_WEBHOOK_SECRET` | Shopify custom app |
 | `SHOPIFY_WEBHOOK_TOPICS` | Exact subscribed topics |
-| `FULFILLMENT_PROVIDERS` | Enabled adapters: `printful`, `printify`, or both |
-| `DEFAULT_FULFILLMENT_PROVIDER` | Provider assigned to newly imported products until an operator confirms mapping |
-| `PRINTFUL_API_KEY` | Printful account/store API token when Printful is enabled |
-| `PRINTIFY_API_KEY`, `PRINTIFY_SHOP_ID` | Printify personal access token and target shop ID when Printify is enabled |
+| `FULFILLMENT_PROVIDERS` | `printful` for launch |
+| `DEFAULT_FULFILLMENT_PROVIDER` | `printful` for launch |
+| `PRINTFUL_API_KEY`, `PRINTFUL_STORE_ID` | Store-limited Printful token and selected store ID |
 | `NEXT_PUBLIC_API_BASE_URL` | `https://<api-domain>/api`; frontend build environment only |
 | `TRUST_PROXY` | Managed host proxy hop count, normally `1` |
 | `DATABASE_SSL_CA` | Provider CA only when required; retain verified TLS by default |
@@ -61,10 +62,11 @@ Whole Donuts LLC is not a nonprofit. Keep voluntary support records separate fro
 4. Deploy the API, wait for `/ready`, then deploy the dashboard. Configure the provider scheduler to run the metric refresh command once each hour.
 5. Configure custom domains, DNS, and managed TLS. Restrict CORS to the deployed dashboard origin.
 6. Register Shopify webhooks only after the API is healthy; complete the Shopify and enabled fulfillment-provider release checks.
-7. Run operator connectivity and catalog reconciliation for both enabled providers. Assign and verify one provider/product mapping for every active item.
+7. Follow the [Shopify + Printful launch runbook](SHOPIFY_PRINTFUL_LAUNCH.md), including the protected dispatch workflow, signed deployed-receiver probe, operator reconciliation, and complete Printful product/variant/approved-branding-file mapping for every active item.
 8. Schedule deletion or minimization of expired referral, validation, integration-event, and reward-ledger records according to [the retention policy](DATA_RETENTION.md).
 9. Bind each consenting rewards sponsor to a verified Shopify customer ID through the operator-only `PUT /api/sponsors/:id/reward-identity` endpoint. Unbound sponsors cannot earn purchase or acceptance rewards.
 10. Reconcile inventory before activation. Product inventory is the aggregate sales cap and each active variant has its own cap; both are transactionally decremented for variant orders.
+11. Configure edge/WAF burst controls and short-retention logs as described in the launch runbook. Never impose one email/account per IP; challenge or manually review suspicious churn while allowing legitimate shared networks.
 
 For local concurrency validation, set `TEST_DATABASE_URL` to a migrated disposable PostgreSQL
 database before running `npm test`. CI provisions PostgreSQL 16 and runs this path automatically.

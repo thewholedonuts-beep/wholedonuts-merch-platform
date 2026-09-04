@@ -1,0 +1,169 @@
+name: Launch Shopify + Printful
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Readiness is read-only; launch may register missing Shopify webhooks.
+        required: true
+        default: readiness
+        type: choice
+        options:
+          - readiness
+          - launch
+      apply_migrations:
+        description: Apply pending migrations using the repository migration runner (launch only).
+        required: true
+        default: true
+        type: boolean
+      confirmation:
+        description: Enter READINESS for readiness mode or LAUNCH for launch mode.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shopify-printful-production-launch
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    name: Validate and launch
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    env:
+      LAUNCH_MODE: ${{ inputs.mode }}
+
+    steps:
+      - name: Confirm requested operation
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          expected="READINESS"
+          if [[ "$LAUNCH_MODE" == "launch" ]]; then expected="LAUNCH"; fi
+          if [[ "$CONFIRMATION" != "$expected" ]]; then
+            echo "::error::Confirmation must exactly match $expected for $LAUNCH_MODE mode."
+            exit 1
+          fi
+          if [[ "$LAUNCH_MODE" == "readiness" && "${{ inputs.apply_migrations }}" == "true" ]]; then
+            echo "::notice::Readiness mode never applies migrations."
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Validate production configuration
+        working-directory: backend
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FRONTEND_URLS: ${{ vars.FRONTEND_URLS }}
+          PUBLIC_API_URL: ${{ vars.PUBLIC_API_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OPERATOR_API_KEY: ${{ secrets.OPERATOR_API_KEY }}
+          RATE_LIMIT_KEY_SALT: ${{ secrets.RATE_LIMIT_KEY_SALT }}
+          ALLOW_SPONSOR_SELF_REGISTRATION: "false"
+          REFERRAL_ANALYTICS_ENABLED: "false"
+          CRUMB_SAVER_REWARDS_ENABLED: "false"
+          SHOPIFY_STORE_URL: ${{ vars.SHOPIFY_STORE_URL }}
+          SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION }}
+          SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+          SHOPIFY_WEBHOOK_SECRET: ${{ secrets.SHOPIFY_WEBHOOK_SECRET }}
+          SHOPIFY_WEBHOOK_TOPICS: orders/create,orders/updated,fulfillments/create,fulfillments/update
+          FULFILLMENT_PROVIDERS: printful
+          DEFAULT_FULFILLMENT_PROVIDER: printful
+          PRINTFUL_API_KEY: ${{ secrets.PRINTFUL_API_KEY }}
+          PRINTFUL_STORE_ID: ${{ vars.PRINTFUL_STORE_ID }}
+        run: node -e "require('./src/config/environment').validateProductionEnvironment()"
+
+      - name: Run targeted backend tests
+        working-directory: backend
+        run: node --test test/environment.test.js test/fulfillment.test.js test/launchShopifyPrintful.test.js test/product.test.js test/rateLimiter.test.js test/shopifyWebhook.test.js
+
+      - name: Build dashboard
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.PUBLIC_API_URL }}/api
+        run: npm run build
+
+      - name: Apply pending database migrations
+        if: inputs.mode == 'launch' && inputs.apply_migrations
+        working-directory: backend
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_CA: ${{ secrets.DATABASE_SSL_CA }}
+          DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+        run: npm run migrate
+
+      - name: Validate integrations and launch gates
+        working-directory: backend
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SSL_CA: ${{ secrets.DATABASE_SSL_CA }}
+          DATABASE_SSL_REJECT_UNAUTHORIZED: "true"
+          FRONTEND_URLS: ${{ vars.FRONTEND_URLS }}
+          PUBLIC_API_URL: ${{ vars.PUBLIC_API_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OPERATOR_API_KEY: ${{ secrets.OPERATOR_API_KEY }}
+          RATE_LIMIT_KEY_SALT: ${{ secrets.RATE_LIMIT_KEY_SALT }}
+          ALLOW_SPONSOR_SELF_REGISTRATION: "false"
+          REFERRAL_ANALYTICS_ENABLED: "false"
+          CRUMB_SAVER_REWARDS_ENABLED: "false"
+          SHOPIFY_STORE_URL: ${{ vars.SHOPIFY_STORE_URL }}
+          SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION }}
+          SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+          SHOPIFY_WEBHOOK_SECRET: ${{ secrets.SHOPIFY_WEBHOOK_SECRET }}
+          SHOPIFY_WEBHOOK_TOPICS: orders/create,orders/updated,fulfillments/create,fulfillments/update
+          FULFILLMENT_PROVIDERS: printful
+          DEFAULT_FULFILLMENT_PROVIDER: printful
+          PRINTFUL_API_KEY: ${{ secrets.PRINTFUL_API_KEY }}
+          PRINTFUL_STORE_ID: ${{ vars.PRINTFUL_STORE_ID }}
+        run: npm run launch:shopify-printful
+
+      - name: Finalize blocked report
+        if: always()
+        working-directory: backend
+        shell: bash
+        run: |
+          if [[ ! -f launch-readiness.json ]]; then
+            printf '%s\n' \
+              '{"mode":"${{ inputs.mode }}","provider":"printful","ready":false,"checks":[{"name":"Workflow prerequisites, tests, build, or migrations","status":"failed"}]}' \
+              > launch-readiness.json
+            {
+              echo "# Shopify + Printful launch readiness"
+              echo
+              echo "**Result:** BLOCKED"
+              echo
+              echo "The workflow stopped before integration checks completed. Review the failed step; no launch success has been claimed."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shopify-printful-${{ inputs.mode }}-report
+          path: backend/launch-readiness.json
+          if-no-files-found: warn
+          retention-days: 30

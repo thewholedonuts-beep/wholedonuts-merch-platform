@@ -1,10 +1,11 @@
 const express = require('express');
-const { query } = require('../config/database');
+const { query, withTransaction } = require('../config/database');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const {
   calculateCustomizationPrice,
   toConsumerProduct,
   toFulfillmentCustomization,
+  validateFulfillmentMappingPayload,
   validateFulfillmentProvider,
 } = require('../utils/product');
 
@@ -178,6 +179,72 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res, next) => {
     );
 
     return res.json({ product: result.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.put('/:id/fulfillment-mapping', authenticateToken, requireAdmin, async (req, res, next) => {
+  try {
+    const mapping = validateFulfillmentMappingPayload(req.body);
+    const result = await withTransaction(async (client) => {
+      const product = await client.query(
+        'SELECT id FROM products WHERE id = $1 FOR UPDATE',
+        [req.params.id]
+      );
+      if (!product.rowCount) {
+        const error = new Error('Product not found.');
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const activeVariants = await client.query(
+        'SELECT id FROM product_variants WHERE product_id = $1 AND active = true FOR UPDATE',
+        [req.params.id]
+      );
+      const activeVariantIds = new Set(activeVariants.rows.map((variant) => variant.id));
+      if (
+        mapping.variants.length !== activeVariantIds.size
+        || mapping.variants.some((variant) => !activeVariantIds.has(variant.variantId))
+      ) {
+        const error = new Error('Provide exactly one Printful mapping for every active product variant.');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      await client.query(
+        `UPDATE products
+         SET fulfillment_provider = 'printful',
+             fulfillment_product_id = $2,
+             printful_product_id = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.id, mapping.fulfillmentProductId]
+      );
+      for (const variant of mapping.variants) {
+        await client.query(
+          `UPDATE product_variants
+           SET fulfillment_variant_id = $2,
+               fulfillment_branding_file_id = $3,
+               fulfillment_branding_placement = $4,
+               updated_at = NOW()
+           WHERE id = $1`,
+          [
+            variant.variantId,
+            variant.fulfillmentVariantId,
+            variant.brandingFileId,
+            variant.brandingPlacement,
+          ]
+        );
+      }
+      return {
+        productId: req.params.id,
+        provider: 'printful',
+        ...mapping,
+      };
+    });
+
+    return res.json({ fulfillmentMapping: result });
   } catch (error) {
     return next(error);
   }

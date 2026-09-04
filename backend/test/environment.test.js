@@ -12,9 +12,14 @@ const productionValues = {
   SHOPIFY_API_VERSION: '2026-07',
   SHOPIFY_ACCESS_TOKEN: 'shopify-token',
   SHOPIFY_WEBHOOK_SECRET: 'webhook-secret',
+  SHOPIFY_WEBHOOK_TOPICS: 'orders/create,orders/updated,fulfillments/create,fulfillments/update',
+  PUBLIC_API_URL: 'https://api.example.test',
+  RATE_LIMIT_KEY_SALT: 'e'.repeat(32),
   PRINTFUL_API_KEY: 'printful-token',
+  PRINTFUL_STORE_ID: '12345',
 };
 const environmentKeys = [
+  'ALLOW_PRINTIFY_FULFILLMENT',
   'ALLOW_SPONSOR_SELF_REGISTRATION',
   'CRUMB_SAVER_REWARDS_ENABLED',
   'DATABASE_ALLOW_INSECURE_TLS',
@@ -30,6 +35,9 @@ const environmentKeys = [
   'PRINTIFY_API_KEY',
   'PRINTIFY_SHOP_ID',
   'PRINTFUL_API_KEY',
+  'PRINTFUL_STORE_ID',
+  'PUBLIC_API_URL',
+  'RATE_LIMIT_KEY_SALT',
   'REWARD_REFERENCE_SALT',
   'REWARDS_PRIVACY_NOTICE_VERSION',
   'REFERRAL_ANALYTICS_ENABLED',
@@ -37,6 +45,7 @@ const environmentKeys = [
   'SHOPIFY_API_VERSION',
   'SHOPIFY_STORE_URL',
   'SHOPIFY_WEBHOOK_SECRET',
+  'SHOPIFY_WEBHOOK_TOPICS',
 ];
 
 function withEnvironment(values, work) {
@@ -92,8 +101,44 @@ test('production requires credentials for each enabled fulfillment provider', { 
     DATABASE_SSL_REJECT_UNAUTHORIZED: 'true',
     NODE_ENV: 'production',
     FULFILLMENT_PROVIDERS: 'printful,printify',
+    ALLOW_PRINTIFY_FULFILLMENT: 'true',
   }, ({ validateProductionEnvironment }) => {
     assert.throws(validateProductionEnvironment, /PRINTIFY_API_KEY/);
+  });
+});
+
+test('production launch rejects Printify unless separately approved', { concurrency: false }, () => {
+  withEnvironment({
+    ...productionValues,
+    DATABASE_SSL_REJECT_UNAUTHORIZED: 'true',
+    NODE_ENV: 'production',
+    FULFILLMENT_PROVIDERS: 'printful,printify',
+    PRINTIFY_API_KEY: 'printify-token',
+    PRINTIFY_SHOP_ID: 'printify-shop',
+  }, ({ validateProductionEnvironment }) => {
+    assert.throws(validateProductionEnvironment, /Printify is not enabled for launch/);
+  });
+});
+
+test('production requires the complete supported Shopify webhook topic set', { concurrency: false }, () => {
+  withEnvironment({
+    ...productionValues,
+    DATABASE_SSL_REJECT_UNAUTHORIZED: 'true',
+    NODE_ENV: 'production',
+    SHOPIFY_WEBHOOK_TOPICS: 'orders/create',
+  }, ({ validateProductionEnvironment }) => {
+    assert.throws(validateProductionEnvironment, /SHOPIFY_WEBHOOK_TOPICS must contain exactly/);
+  });
+});
+
+test('production requires a valid public HTTPS API origin', { concurrency: false }, () => {
+  withEnvironment({
+    ...productionValues,
+    DATABASE_SSL_REJECT_UNAUTHORIZED: 'true',
+    NODE_ENV: 'production',
+    PUBLIC_API_URL: 'http://api.example.test/path',
+  }, ({ validateProductionEnvironment }) => {
+    assert.throws(validateProductionEnvironment, /PUBLIC_API_URL must be/);
   });
 });
 

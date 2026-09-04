@@ -44,6 +44,40 @@ function validateFulfillmentProvider(value) {
   return provider;
 }
 
+function fulfillmentMappingError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function validateFulfillmentMappingPayload(payload = {}) {
+  const fulfillmentProductId = String(payload.fulfillmentProductId || '').trim();
+  const variants = Array.isArray(payload.variants) ? payload.variants : [];
+  if (!fulfillmentProductId || !variants.length) {
+    throw fulfillmentMappingError('fulfillmentProductId and at least one variant mapping are required.');
+  }
+
+  const seenVariantIds = new Set();
+  const normalizedVariants = variants.map((variant) => {
+    const variantId = String(variant.variantId || '').trim();
+    const fulfillmentVariantId = String(variant.fulfillmentVariantId || '').trim();
+    const brandingFileId = String(variant.brandingFileId || '').trim();
+    const brandingPlacement = String(variant.brandingPlacement || '').trim();
+    if (!variantId || !fulfillmentVariantId || !brandingFileId || !brandingPlacement) {
+      throw fulfillmentMappingError(
+        'Each variant mapping requires variantId, fulfillmentVariantId, brandingFileId, and brandingPlacement.'
+      );
+    }
+    if (seenVariantIds.has(variantId)) {
+      throw fulfillmentMappingError(`Duplicate variant mapping: ${variantId}.`);
+    }
+    seenVariantIds.add(variantId);
+    return { variantId, fulfillmentVariantId, brandingFileId, brandingPlacement };
+  });
+
+  return { fulfillmentProductId, variants: normalizedVariants };
+}
+
 function calculateCustomizationPrice(product, payload = {}, variant = null) {
   const pricing = product.customization_options || {};
   const logoPlacements = Array.isArray(payload.logoPlacements) ? payload.logoPlacements : [];
@@ -99,5 +133,6 @@ module.exports = {
   positiveInteger,
   toConsumerProduct,
   toFulfillmentCustomization,
+  validateFulfillmentMappingPayload,
   validateFulfillmentProvider,
 };

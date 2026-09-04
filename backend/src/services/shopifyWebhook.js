@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { shopifyWebhookTopics } = require('../config/environment');
 
 function verifyShopifyWebhook(rawBody, signature, secret) {
   if (!Buffer.isBuffer(rawBody) || !signature || !secret) {
@@ -11,12 +12,10 @@ function verifyShopifyWebhook(rawBody, signature, secret) {
 }
 
 function allowedShopifyTopics() {
-  return String(
-    process.env.SHOPIFY_WEBHOOK_TOPICS || 'orders/create,orders/updated,fulfillments/create,fulfillments/update'
-  )
-    .split(',')
-    .map((topic) => topic.trim())
-    .filter(Boolean);
+  const configuredTopics = shopifyWebhookTopics();
+  return configuredTopics.length
+    ? configuredTopics
+    : ['orders/create', 'orders/updated', 'fulfillments/create', 'fulfillments/update'];
 }
 
 function webhookKind(topic) {

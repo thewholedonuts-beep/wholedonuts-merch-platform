@@ -1,5 +1,7 @@
 # Shopify production setup
 
+Use the authoritative [Shopify + Printful production launch runbook](SHOPIFY_PRINTFUL_LAUNCH.md) for owner account, secret-entry, mapping, policy, workflow, and paid test-order steps.
+
 ## Custom app
 
 Create a custom app in the Whole Donuts Shopify store and grant only the scopes required by the enabled workflows:
@@ -7,7 +9,7 @@ Create a custom app in the Whole Donuts Shopify store and grant only the scopes 
 - `read_products` and `read_inventory` for catalog synchronization.
 - `read_orders` for order reconciliation.
 - `write_orders` only if trusted operations will use `POST /api/shopify/create-order`.
-- Fulfillment scopes only if the app will manage fulfillment directly rather than through Printful's Shopify app.
+- No fulfillment write scope is required for launch; the official Printful Shopify app manages fulfillment.
 
 Record the store hostname without a protocol or path as `SHOPIFY_STORE_URL`, for example `whole-donuts.myshopify.com`, and configure a currently supported stable version in `SHOPIFY_API_VERSION`. Store the Admin API token only in the Express service's secret manager.
 
@@ -28,7 +30,7 @@ Use the production API callback:
 https://<api-domain>/api/orders/webhook/shopify
 ```
 
-Copy the app's webhook signing secret to `SHOPIFY_WEBHOOK_SECRET` in the API secret store and set `SHOPIFY_WEBHOOK_TOPICS` to the exact subscribed topics. The endpoint verifies the HMAC over Shopify's original request bytes, requires `X-Shopify-Webhook-Id`, records each delivery, and safely acknowledges duplicates. Do not place the callback behind a browser login, CDN body rewriting, or a generic rate limit that can drop Shopify retries.
+Copy the custom app's client/webhook signing secret to `SHOPIFY_WEBHOOK_SECRET` in the API secret store and set `SHOPIFY_WEBHOOK_TOPICS` to the exact subscribed topics. The `Launch Shopify + Printful` workflow verifies or idempotently creates these subscriptions. The endpoint verifies the HMAC over Shopify's original request bytes, requires `X-Shopify-Webhook-Id`, records each delivery, and safely acknowledges duplicates. Do not place the callback behind a browser login, CDN body rewriting, or a generic rate limit that can drop Shopify retries.
 
 ## Release check
 
