@@ -73,7 +73,9 @@ carrier NAT, VPNs, and IPv6 rotation make that rule both inaccurate and easy to 
 instead layers short-lived in-memory limits per normalized account/email identifier and per IP
 range for registration, login, checkout, referral, consent, reward-identity, and trusted acceptance
 actions. Account/email keys are HMACed with `RATE_LIMIT_KEY_SALT`; raw email addresses are not rate
-limit keys, and the application does not persist raw IP addresses for these controls. Referral
+limit keys, and the application does not persist raw IP addresses for these controls. Public
+referral-code limits use an HMAC of code plus normalized IP range, so one client or popular code
+cannot consume a global code-wide quota. Referral
 analytics, when separately enabled, uses the existing keyed IP hash and approved retention policy.
 
 The default limits deliberately permit multiple legitimate people on one network. Do not lower
@@ -110,14 +112,20 @@ privacy processes; the repository does not claim those external controls exist.
      "variants": [
        {
          "variantId": "LOCAL_PRODUCT_VARIANT_UUID",
-         "fulfillmentVariantId": "PRINTFUL_SYNC_VARIANT_ID"
+         "fulfillmentVariantId": "PRINTFUL_SYNC_VARIANT_ID",
+         "brandingFileId": "PRINTFUL_FILE_ID",
+         "brandingPlacement": "sleeve_left"
        }
      ]
    }
    ```
 
-   Supply exactly one entry for every active local variant. The launch workflow rejects missing,
-   mismatched, non-Printful, or fabricated mappings.
+   Supply exactly one entry for every active local variant. Before recording `brandingFileId`,
+   visually inspect that exact remote Printful file and final mockup and confirm it contains the
+   required `Made By +U, 4 ALL` artwork at `brandingPlacement`. The workflow resolves the mapped
+   sync variant from Printful and requires that same remote file ID and placement to remain attached;
+   local branding metadata alone cannot pass. It rejects missing, unsynced, mismatched, non-Printful,
+   or fabricated mappings.
 5. Have the owner approve the final mockup, rights, retail price, margin, SKU, size/color set, and
    the mandatory signature. Then activate only the approved local products.
 
@@ -153,8 +161,12 @@ From **Actions → Launch Shopify + Printful → Run workflow**:
 3. The workflow validates required settings without printing their values, runs targeted backend
    tests and the frontend production build, optionally invokes the existing forward-only migration
    runner, verifies Shopify and Printful connectivity, verifies every active product and variant
-   mapping plus mandatory branding, and idempotently creates only missing required Shopify webhook
-   subscriptions at:
+   mapping plus its owner-approved remote Printful branding file/placement, and sends invalid- then
+   valid-signature deliberately unsupported readiness payloads to the deployed callback. Both are
+   rejected before parsing or database/business-event processing; the expected `401` then `400`
+   responses prove the public receiver enforces HMAC and uses the same `SHOPIFY_WEBHOOK_SECRET`.
+   The workflow then
+   idempotently creates only missing required Shopify webhook subscriptions at:
 
    ```text
    https://<api-origin>/api/orders/webhook/shopify

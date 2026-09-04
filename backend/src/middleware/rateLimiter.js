@@ -21,7 +21,9 @@ function accountRateLimitKey(req) {
 }
 
 function referralRateLimitKey(req) {
-  return keyedIdentifier(req.body?.code || `anonymous:${ipKeyGenerator(req.ip, 56)}`);
+  const code = String(req.body?.code || 'missing-code').trim().toLowerCase();
+  const network = ipKeyGenerator(req.ip, 56);
+  return keyedIdentifier(`${code}:${network}`);
 }
 
 function ipLimiter({ limit, message, windowMs = FIFTEEN_MINUTES }) {
@@ -114,6 +116,7 @@ module.exports = {
   checkoutLimiters,
   generalApiLimiter,
   loginLimiters,
+  referralRateLimitKey,
   referralLimiters,
   registrationLimiters,
   sensitiveAccountLimiters,

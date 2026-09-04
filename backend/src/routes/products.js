@@ -225,9 +225,16 @@ router.put('/:id/fulfillment-mapping', authenticateToken, requireAdmin, async (r
         await client.query(
           `UPDATE product_variants
            SET fulfillment_variant_id = $2,
+               fulfillment_branding_file_id = $3,
+               fulfillment_branding_placement = $4,
                updated_at = NOW()
            WHERE id = $1`,
-          [variant.variantId, variant.fulfillmentVariantId]
+          [
+            variant.variantId,
+            variant.fulfillmentVariantId,
+            variant.brandingFileId,
+            variant.brandingPlacement,
+          ]
         );
       }
       return {

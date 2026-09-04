@@ -62,7 +62,7 @@ Whole Donuts LLC is not a nonprofit. Keep voluntary support records separate fro
 4. Deploy the API, wait for `/ready`, then deploy the dashboard. Configure the provider scheduler to run the metric refresh command once each hour.
 5. Configure custom domains, DNS, and managed TLS. Restrict CORS to the deployed dashboard origin.
 6. Register Shopify webhooks only after the API is healthy; complete the Shopify and enabled fulfillment-provider release checks.
-7. Follow the [Shopify + Printful launch runbook](SHOPIFY_PRINTFUL_LAUNCH.md), including the protected dispatch workflow, operator reconciliation, and complete Printful product/variant mapping for every active item.
+7. Follow the [Shopify + Printful launch runbook](SHOPIFY_PRINTFUL_LAUNCH.md), including the protected dispatch workflow, signed deployed-receiver probe, operator reconciliation, and complete Printful product/variant/approved-branding-file mapping for every active item.
 8. Schedule deletion or minimization of expired referral, validation, integration-event, and reward-ledger records according to [the retention policy](DATA_RETENTION.md).
 9. Bind each consenting rewards sponsor to a verified Shopify customer ID through the operator-only `PUT /api/sponsors/:id/reward-identity` endpoint. Unbound sponsors cannot earn purchase or acceptance rewards.
 10. Reconcile inventory before activation. Product inventory is the aggregate sales cap and each active variant has its own cap; both are transactionally decremented for variant orders.

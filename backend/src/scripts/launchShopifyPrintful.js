@@ -1,5 +1,6 @@
 const fs = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 const {
   fulfillmentProviders,
   shopifyWebhookTopics,
@@ -17,6 +18,49 @@ const TOPIC_NAMES = {
 
 function webhookCallbackUrl(publicApiUrl) {
   return `${publicApiUrl.replace(/\/$/, '')}/api/orders/webhook/shopify`;
+}
+
+async function verifyDeployedWebhookReceiver() {
+  const callbackUrl = webhookCallbackUrl(process.env.PUBLIC_API_URL);
+  const body = Buffer.from(JSON.stringify({
+    purpose: 'shopify-webhook-readiness',
+    nonce: crypto.randomUUID(),
+    issuedAt: new Date().toISOString(),
+  }));
+  const signature = crypto
+    .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+    .update(body)
+    .digest('base64');
+
+  async function sendProbe(probeSignature) {
+    const response = await fetch(callbackUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Shopify-Hmac-Sha256': probeSignature,
+        'X-Shopify-Topic': 'whole-donuts/readiness',
+        'X-Shopify-Webhook-Id': `readiness-${crypto.randomUUID()}`,
+      },
+      body,
+    });
+    try {
+      return { response, payload: await response.json() };
+    } catch {
+      throw new Error(`Deployed Shopify webhook receiver returned non-JSON status ${response.status}.`);
+    }
+  }
+
+  const invalid = await sendProbe(
+    crypto.createHmac('sha256', 'intentionally-invalid-readiness-key').update(body).digest('base64')
+  );
+  if (invalid.response.status !== 401 || invalid.payload?.error !== 'Invalid Shopify webhook signature.') {
+    throw new Error('Deployed Shopify webhook receiver does not reject an invalid readiness signature.');
+  }
+
+  const valid = await sendProbe(signature);
+  if (valid.response.status !== 400 || valid.payload?.error !== 'Unsupported Shopify webhook topic.') {
+    throw new Error(`Deployed Shopify webhook receiver failed its signed readiness probe with status ${valid.response.status}.`);
+  }
 }
 
 function evaluateMappings(rows, printfulProducts) {
@@ -77,6 +121,18 @@ function evaluateMappings(rows, printfulProducts) {
         || remoteVariant?.synced !== true
       ) {
         errors.push(`Variant ${variant.variant_id} does not match the Shopify variant linked by Printful.`);
+        continue;
+      }
+      const brandingFile = (remoteVariant.files || []).find((file) => (
+        String(file.id) === String(variant.fulfillment_branding_file_id)
+        && String(file.type) === String(variant.fulfillment_branding_placement)
+      ));
+      if (
+        !variant.fulfillment_branding_file_id
+        || !variant.fulfillment_branding_placement
+        || !brandingFile
+      ) {
+        errors.push(`Variant ${variant.variant_id} is missing its owner-approved remote Printful branding file or placement.`);
       }
     }
   }
@@ -240,7 +296,9 @@ async function verifyDatabaseAndMappings(printfulProducts) {
             p.signature_placement,
             v.id AS variant_id,
             v.shopify_variant_id,
-            v.fulfillment_variant_id
+            v.fulfillment_variant_id,
+            v.fulfillment_branding_file_id,
+            v.fulfillment_branding_placement
      FROM products p
      LEFT JOIN product_variants v ON v.product_id = p.id AND v.active = true
      WHERE p.active = true
@@ -283,6 +341,7 @@ async function run() {
     await check('Shopify connectivity', verifyShopifyConnection);
     const printfulProducts = await check('Printful connectivity and catalog', loadPrintfulProducts);
     await check('Database migrations and product mappings', () => verifyDatabaseAndMappings(printfulProducts));
+    await check('Deployed webhook receiver and signing secret', verifyDeployedWebhookReceiver);
     await check('Shopify webhook subscriptions', () => ensureShopifyWebhooks(mode));
     report.ready = true;
   } catch {
@@ -321,5 +380,6 @@ if (require.main === module) {
 
 module.exports = {
   evaluateMappings,
+  verifyDeployedWebhookReceiver,
   webhookCallbackUrl,
 };

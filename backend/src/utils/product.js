@@ -61,14 +61,18 @@ function validateFulfillmentMappingPayload(payload = {}) {
   const normalizedVariants = variants.map((variant) => {
     const variantId = String(variant.variantId || '').trim();
     const fulfillmentVariantId = String(variant.fulfillmentVariantId || '').trim();
-    if (!variantId || !fulfillmentVariantId) {
-      throw fulfillmentMappingError('Each variant mapping requires variantId and fulfillmentVariantId.');
+    const brandingFileId = String(variant.brandingFileId || '').trim();
+    const brandingPlacement = String(variant.brandingPlacement || '').trim();
+    if (!variantId || !fulfillmentVariantId || !brandingFileId || !brandingPlacement) {
+      throw fulfillmentMappingError(
+        'Each variant mapping requires variantId, fulfillmentVariantId, brandingFileId, and brandingPlacement.'
+      );
     }
     if (seenVariantIds.has(variantId)) {
       throw fulfillmentMappingError(`Duplicate variant mapping: ${variantId}.`);
     }
     seenVariantIds.add(variantId);
-    return { variantId, fulfillmentVariantId };
+    return { variantId, fulfillmentVariantId, brandingFileId, brandingPlacement };
   });
 
   return { fulfillmentProductId, variants: normalizedVariants };

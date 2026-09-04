@@ -1,6 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { accountRateLimitKey } = require('../src/middleware/rateLimiter');
+const {
+  accountRateLimitKey,
+  referralRateLimitKey,
+} = require('../src/middleware/rateLimiter');
 
 test('account rate-limit keys are stable keyed hashes without raw email or IP data', () => {
   const originalSalt = process.env.RATE_LIMIT_KEY_SALT;
@@ -23,4 +26,13 @@ test('different accounts on a shared IP receive different account keys', () => {
   const first = accountRateLimitKey({ body: { email: 'first@example.com' }, ip: '203.0.113.10' });
   const second = accountRateLimitKey({ body: { email: 'second@example.com' }, ip: '203.0.113.10' });
   assert.notEqual(first, second);
+});
+
+test('referral limits isolate the same public code by privacy-preserving network key', () => {
+  const first = referralRateLimitKey({ body: { code: 'CRUMB123' }, ip: '203.0.113.10' });
+  const second = referralRateLimitKey({ body: { code: 'CRUMB123' }, ip: '203.0.113.11' });
+  assert.notEqual(first, second);
+  assert.equal(first.includes('CRUMB123'), false);
+  assert.equal(first.includes('203.0.113.10'), false);
+  assert.match(first, /^[a-f0-9]{64}$/);
 });
