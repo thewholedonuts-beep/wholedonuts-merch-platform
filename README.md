@@ -1,6 +1,6 @@
 # Whole Donuts Merch Platform
 
-Private sponsor merchandise operations built with a Next.js dashboard, Express API, PostgreSQL, Shopify, and Printful fulfillment. Shopify is the checkout and order system of record; PostgreSQL stores Whole Donuts sponsor, referral, and operational data.
+Private sponsor merchandise operations built with a Next.js dashboard, Express API, PostgreSQL, Shopify, and Printful/Printify fulfillment. Shopify is the public checkout and order system of record; PostgreSQL stores Whole Donuts sponsor, consent, referral, reward-ledger, and operational data.
 
 ## Launch status
 
@@ -11,7 +11,7 @@ This repository does not establish a public storefront or a production destinati
 ```text
 https://merch.example.com       Next.js dashboard
              |
-https://merch-api.example.com   Express API, Shopify webhooks, Printful status
+https://merch-api.example.com   Express API, Shopify webhooks, fulfillment-provider operations
              |
            private managed PostgreSQL
 ```
@@ -45,12 +45,18 @@ Run the metric refresh from one provider scheduler, not from each API instance.
 ## Commerce integration
 
 - [Shopify setup](docs/SHOPIFY_SETUP.md) covers the custom app, scopes, verified webhook topics, and callback URL.
-- [Printful setup](docs/PRINTFUL_SETUP.md) covers the Shopify fulfillment connection and server-side API token.
+- [Fulfillment provider setup](docs/FULFILLMENT_PROVIDERS.md) covers Printful and Printify credentials, product mapping, and reconciliation.
 - `POST /api/orders/webhook/shopify` accepts only configured topics with a valid Shopify HMAC and webhook delivery ID. Replayed deliveries are acknowledged without reprocessing.
-- `GET /api/printful/status` is an operator-only connectivity check. Do not expose integration tokens to the frontend.
+- `GET /api/fulfillment/:provider/status` and `POST /api/fulfillment/:provider/reconcile-catalog` are operator-only provider checks. Do not expose integration tokens to the frontend.
 
-Catalog products imported from Shopify start inactive and are not returned by public catalog or customization endpoints until an operator explicitly approves them. Sponsor self-registration and referral analytics both remain disabled unless deliberately enabled after owner review.
+Catalog products imported from Shopify start inactive and are not returned by public catalog or customization endpoints until an operator explicitly approves them. Public product responses exclude provider IDs, cost, and markup. Sponsor self-registration, journey analytics, and Crumb Saver rewards remain disabled unless deliberately enabled after owner and privacy review. Raw public click/share events never create financial rewards; only trusted invite-acceptance events and verified paid Shopify webhooks write to the reward ledger.
+
+Customizable goods carry the server-enforced signature `Made By +U, 4 ALL` at the left side or sleeve. The signature cannot be removed by client input. This repository does not grant logo or downloadable-asset rights.
+
+Whole Donuts is an LLC, not a nonprofit. Voluntary support to Whole Donuts LLC is not tax-deductible, not a purchase, not an investment, and does not automatically earn rewards. Contributions may also be time, skill, encouragement, sharing, or simply showing up; financial amount does not determine a person's value or Crumb Saver eligibility.
 
 ## Security boundary
 
 Browser sessions use HttpOnly, Secure production cookies; the API enforces CSRF validation for cookie-authenticated mutations. Sponsor access remains scoped to the authenticated sponsor. Operator-only routes require the separate `X-Operator-Key` credential, whose value must be stored in the provider secret manager and sent only by trusted operations tooling.
+
+See [data retention and consent](docs/DATA_RETENTION.md) before enabling rewards or analytics.

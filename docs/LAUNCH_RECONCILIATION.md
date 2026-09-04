@@ -2,6 +2,8 @@
 
 **Status:** owner review required; no public merchandising destination is verified by this repository.
 
+Whole Donuts is an LLC, not a nonprofit. If the public site later describes support, use the exact concept **voluntary support to Whole Donuts LLC** and state that it is not tax-deductible, not a purchase, not an investment, and does not automatically earn rewards. Contributions can also be time, a skill, encouragement, sharing, or simply showing up; do not rank people by financial amount.
+
 ## Safe inclusion after owner confirmation
 
 The only candidate public representation is a single external link in the canonical site's [Goods Window](https://wenevergonnaclose.com/#table) to an owner-confirmed HTTPS destination. Its published storefront configuration is currently blank, and no deployment record in this repository identifies a production destination. Before adding that link, confirm the destination, catalog/design rights, Shopify checkout, Printful fulfillment mappings, customer support terms, and accessibility. The dashboard itself is invitation-only and should not be presented as a public store.

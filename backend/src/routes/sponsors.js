@@ -6,7 +6,14 @@ const { authenticateToken, requireSponsorAccess } = require('../middleware/auth'
 const { generateUniqueReferralCode } = require('../utils/referralCode');
 const { calculateEffortScore, applyTierDiscountCap } = require('../utils/effortScore');
 const { clearSessionCookies, setSessionCookies } = require('../middleware/security');
-const { selfRegistrationEnabled } = require('../config/environment');
+const {
+  hashRewardIdentity,
+} = require('../services/rewards');
+const {
+  approvedRewardsPrivacyNoticeVersion,
+  rewardsEnabled,
+  selfRegistrationEnabled,
+} = require('../config/environment');
 
 const router = express.Router();
 
@@ -16,7 +23,7 @@ function isEmail(value) {
 
 function sanitizeSponsor(row) {
   if (!row) return null;
-  const { password_hash, ...sponsor } = row;
+  const { password_hash, reward_identity_hash, ...sponsor } = row;
   return sponsor;
 }
 
@@ -26,10 +33,14 @@ router.post('/register', async (req, res, next) => {
   }
 
   try {
-    const { name, email, password, totalContribution = 0 } = req.body;
+    const { name, email, password, rewardsConsent = false, privacyNoticeVersion } = req.body;
 
     if (!name || !isEmail(email) || !password || String(password).length < 8) {
       return res.status(400).json({ error: 'Name, valid email, and a password with at least 8 characters are required.' });
+    }
+    const approvedNoticeVersion = approvedRewardsPrivacyNoticeVersion();
+    if (rewardsConsent === true && (!rewardsEnabled() || privacyNoticeVersion !== approvedNoticeVersion)) {
+      return res.status(400).json({ error: 'Rewards consent requires the current approved privacy notice.' });
     }
 
     const sponsor = await withTransaction(async (client) => {
@@ -40,20 +51,38 @@ router.post('/register', async (req, res, next) => {
 
       const passwordHash = await bcrypt.hash(password, 12);
       const tempCode = await generateUniqueReferralCode(name.slice(0, 6));
-      const contribution = Number(totalContribution) || 0;
-      const tierState = applyTierDiscountCap(0, contribution);
+      const financialSupportAmount = 0;
+      const tierState = applyTierDiscountCap(0, 0);
 
       const sponsorInsert = await client.query(
-        `INSERT INTO sponsors (name, email, password_hash, referral_code, total_contribution, tier, customization_limit, discount_earned)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO sponsors
+           (name, email, password_hash, referral_code, total_contribution, tier, customization_limit, discount_earned,
+            rewards_consent, rewards_consent_at, privacy_notice_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $9 THEN NOW() ELSE NULL END, $10)
          RETURNING *`,
-        [name.trim(), email.toLowerCase(), passwordHash, tempCode, contribution, tierState.tier, tierState.customizationLimit, tierState.discountEarned]
+        [
+          name.trim(),
+          email.toLowerCase(),
+          passwordHash,
+          tempCode,
+          financialSupportAmount,
+          tierState.tier,
+          tierState.customizationLimit,
+          tierState.discountEarned,
+          rewardsConsent === true,
+          privacyNoticeVersion || null,
+        ]
       );
 
       await client.query(
         `INSERT INTO referral_codes (sponsor_id, code_string)
          VALUES ($1, $2)`,
         [sponsorInsert.rows[0].id, tempCode]
+      );
+      await client.query(
+        `INSERT INTO sponsor_consent_events (sponsor_id, purpose, granted, policy_version, source)
+         VALUES ($1, 'referral_rewards', $2, $3, 'self_registration')`,
+        [sponsorInsert.rows[0].id, rewardsConsent === true, privacyNoticeVersion || null]
       );
 
       return sponsorInsert.rows[0];
@@ -65,6 +94,82 @@ router.post('/register', async (req, res, next) => {
 
     return res.status(201).json({ sponsor: sanitizeSponsor(sponsor) });
   } catch (error) {
+    return next(error);
+  }
+});
+
+router.put('/me/consent', authenticateToken, async (req, res, next) => {
+  try {
+    if (!req.user.sponsorId) {
+      return res.status(403).json({ error: 'Sponsor access is required.' });
+    }
+    if (typeof req.body.rewardsConsent !== 'boolean') {
+      return res.status(400).json({ error: 'rewardsConsent must be true or false.' });
+    }
+    const approvedNoticeVersion = approvedRewardsPrivacyNoticeVersion();
+    if (req.body.rewardsConsent && (!rewardsEnabled() || req.body.privacyNoticeVersion !== approvedNoticeVersion)) {
+      return res.status(400).json({ error: 'Rewards consent requires the current approved privacy notice.' });
+    }
+
+    const sponsor = await withTransaction(async (client) => {
+      const result = await client.query(
+        `UPDATE sponsors
+         SET rewards_consent = $2,
+             rewards_consent_at = CASE WHEN $2 THEN NOW() ELSE rewards_consent_at END,
+             rewards_consent_withdrawn_at = CASE WHEN $2 THEN NULL ELSE NOW() END,
+             privacy_notice_version = CASE WHEN $2 THEN $3 ELSE privacy_notice_version END,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [req.user.sponsorId, req.body.rewardsConsent, req.body.privacyNoticeVersion || null]
+      );
+      await client.query(
+        `INSERT INTO sponsor_consent_events (sponsor_id, purpose, granted, policy_version, source)
+         VALUES ($1, 'referral_rewards', $2, $3, 'sponsor_portal')`,
+        [req.user.sponsorId, req.body.rewardsConsent, req.body.privacyNoticeVersion || null]
+      );
+      return result.rows[0];
+    });
+    return res.json({ sponsor: sanitizeSponsor(sponsor) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.put('/:id/reward-identity', authenticateToken, async (req, res, next) => {
+  try {
+    if (!req.user.isOperator) {
+      return res.status(403).json({ error: 'Admin access is required.' });
+    }
+    if (String(req.body.provider || '').toLowerCase() !== 'shopify' || !req.body.subject) {
+      return res.status(400).json({ error: 'A server-verified Shopify customer subject is required.' });
+    }
+    let identityHash;
+    try {
+      identityHash = hashRewardIdentity('shopify', req.body.subject);
+    } catch (error) {
+      if (error.message.includes('Shopify identity')) {
+        return res.status(400).json({ error: error.message });
+      }
+      throw error;
+    }
+    const result = await query(
+      `UPDATE sponsors
+       SET reward_identity_hash = $2,
+           reward_identity_bound_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, identityHash]
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ error: 'Sponsor not found.' });
+    }
+    return res.json({ sponsor: sanitizeSponsor(result.rows[0]), rewardIdentityBound: true });
+  } catch (error) {
+    if (error.code === '23505' && error.constraint === 'idx_sponsors_reward_identity') {
+      return res.status(409).json({ error: 'That Shopify customer identity is already bound to a rewards account.' });
+    }
     return next(error);
   }
 });
@@ -183,7 +288,12 @@ async function getDashboard(req, res, next) {
          COALESCE(SUM(CASE WHEN event_type = 'click' THEN 1 ELSE 0 END), 0) AS clicks,
          COALESCE(SUM(CASE WHEN event_type = 'share' THEN 1 ELSE 0 END), 0) AS shares,
          COALESCE(SUM(CASE WHEN event_type = 'conversion' THEN 1 ELSE 0 END), 0) AS conversions,
-         COALESCE(MAX(rc.usage_count), 0) AS usage_count
+         COALESCE(MAX(rc.usage_count), 0) AS usage_count,
+         COALESCE((
+           SELECT SUM(rl.points_delta)
+           FROM reward_ledger rl
+           WHERE rl.sponsor_id = $1
+         ), 0) AS verified_reward_points
        FROM referral_codes rc
        LEFT JOIN referral_events re ON rc.id = re.code_id
        WHERE rc.sponsor_id = $1
@@ -192,8 +302,12 @@ async function getDashboard(req, res, next) {
     );
 
     const metrics = metricsResult.rows[0] || { clicks: 0, shares: 0, conversions: 0, usage_count: 0 };
-    const effort = calculateEffortScore(metrics);
-    const tierState = applyTierDiscountCap(effort.discountEarned, sponsor.total_contribution);
+    const effort = calculateEffortScore({
+      ...metrics,
+      usageCount: metrics.usage_count,
+      verifiedRewardPoints: metrics.verified_reward_points,
+    });
+    const tierState = applyTierDiscountCap(effort.discountEarned, metrics.verified_reward_points);
 
     await query(
       `UPDATE sponsors

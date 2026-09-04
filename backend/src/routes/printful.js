@@ -1,16 +1,16 @@
 const express = require('express');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const { getStoreInfo } = require('../services/printful');
+const { getFulfillmentAdapter } = require('../services/fulfillment');
 
 const router = express.Router();
 
 router.get('/status', authenticateToken, requireAdmin, async (_req, res, next) => {
   try {
-    const data = await getStoreInfo();
+    const data = await getFulfillmentAdapter('printful').getStatus();
     return res.json({
       configured: true,
-      connected: true,
-      storeId: data?.result?.id || null,
+      ...data,
+      storeId: data.accountId,
     });
   } catch (error) {
     return next(error);

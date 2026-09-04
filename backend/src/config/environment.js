@@ -12,6 +12,21 @@ function referralAnalyticsEnabled() {
   return process.env.REFERRAL_ANALYTICS_ENABLED === 'true';
 }
 
+function rewardsEnabled() {
+  return process.env.CRUMB_SAVER_REWARDS_ENABLED === 'true';
+}
+
+function approvedRewardsPrivacyNoticeVersion() {
+  return process.env.REWARDS_PRIVACY_NOTICE_VERSION || '';
+}
+
+function fulfillmentProviders() {
+  return String(process.env.FULFILLMENT_PROVIDERS || 'printful')
+    .split(',')
+    .map((provider) => provider.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function parseOrigins(value) {
   const origins = String(value || '')
     .split(',')
@@ -57,12 +72,25 @@ function validateProductionEnvironment() {
     'OPERATOR_API_KEY',
     'FRONTEND_URLS',
     'SHOPIFY_STORE_URL',
+    'SHOPIFY_API_VERSION',
     'SHOPIFY_ACCESS_TOKEN',
     'SHOPIFY_WEBHOOK_SECRET',
-    'PRINTFUL_API_KEY',
   ];
+  const providers = fulfillmentProviders();
+  if (!providers.length || providers.some((provider) => !['printful', 'printify'].includes(provider))) {
+    throw new Error('FULFILLMENT_PROVIDERS must contain printful, printify, or both.');
+  }
+  if (providers.includes('printful')) {
+    required.push('PRINTFUL_API_KEY');
+  }
+  if (providers.includes('printify')) {
+    required.push('PRINTIFY_API_KEY', 'PRINTIFY_SHOP_ID');
+  }
   if (referralAnalyticsEnabled()) {
     required.push('IP_HASH_SALT');
+  }
+  if (rewardsEnabled()) {
+    required.push('REWARD_REFERENCE_SALT', 'REWARDS_PRIVACY_NOTICE_VERSION');
   }
   const missing = required.filter((name) => !process.env[name]);
 
@@ -73,6 +101,9 @@ function validateProductionEnvironment() {
   const minimumLengthSecrets = ['JWT_SECRET', 'OPERATOR_API_KEY'];
   if (referralAnalyticsEnabled()) {
     minimumLengthSecrets.push('IP_HASH_SALT');
+  }
+  if (rewardsEnabled()) {
+    minimumLengthSecrets.push('REWARD_REFERENCE_SALT');
   }
 
   minimumLengthSecrets.forEach((name) => {
@@ -85,6 +116,14 @@ function validateProductionEnvironment() {
 
   if (!/^[a-z0-9][a-z0-9.-]*\.myshopify\.com$/i.test(process.env.SHOPIFY_STORE_URL)) {
     throw new Error('SHOPIFY_STORE_URL must be a Shopify store hostname without a protocol or path.');
+  }
+  if (!/^\d{4}-(01|04|07|10)$/.test(process.env.SHOPIFY_API_VERSION)) {
+    throw new Error('SHOPIFY_API_VERSION must be a supported YYYY-MM stable API version.');
+  }
+
+  const defaultProvider = String(process.env.DEFAULT_FULFILLMENT_PROVIDER || providers[0]).toLowerCase();
+  if (!providers.includes(defaultProvider)) {
+    throw new Error('DEFAULT_FULFILLMENT_PROVIDER must be included in FULFILLMENT_PROVIDERS.');
   }
 }
 
@@ -101,8 +140,11 @@ function trustProxySetting() {
 
 module.exports = {
   frontendOrigins,
+  fulfillmentProviders,
+  approvedRewardsPrivacyNoticeVersion,
   isProduction,
   referralAnalyticsEnabled,
+  rewardsEnabled,
   selfRegistrationEnabled,
   trustProxySetting,
   validateDatabaseEnvironment,
