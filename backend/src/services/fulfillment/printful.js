@@ -1,13 +1,14 @@
 const { requestJson } = require('./request');
 
 function config() {
-  if (!process.env.PRINTFUL_API_KEY) {
+  if (!process.env.PRINTFUL_API_KEY || !process.env.PRINTFUL_STORE_ID) {
     throw new Error('Printful credentials are not configured.');
   }
   return {
     baseUrl: process.env.PRINTFUL_API_BASE_URL || 'https://api.printful.com',
     headers: {
       Authorization: `Bearer ${process.env.PRINTFUL_API_KEY}`,
+      'X-PF-Store-Id': process.env.PRINTFUL_STORE_ID,
     },
   };
 }

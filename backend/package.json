@@ -11,6 +11,7 @@
     "start": "node src/server.js",
     "check": "node -e \"require('./src/app'); console.log('backend ok'); process.exit(0)\"",
     "migrate": "node src/scripts/migrate.js",
+    "launch:shopify-printful": "node src/scripts/launchShopifyPrintful.js",
     "refresh-sponsor-metrics": "node src/jobs/refreshSponsorMetrics.js",
     "test": "node --test"
   },

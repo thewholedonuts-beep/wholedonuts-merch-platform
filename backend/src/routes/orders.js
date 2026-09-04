@@ -18,6 +18,7 @@ const {
   rewardsEnabled,
 } = require('../services/rewards');
 const { approvedRewardsPrivacyNoticeVersion } = require('../config/environment');
+const { checkoutLimiters } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
@@ -27,7 +28,7 @@ function sanitizeOrder(row) {
   return order;
 }
 
-router.post('/', authenticateToken, async (req, res, next) => {
+router.post('/', authenticateToken, ...checkoutLimiters, async (req, res, next) => {
   try {
     const { sponsorId, customerName, customerEmail, items, customizationData = {}, referralCodeUsed } = req.body;
     if (!customerName || !customerEmail) {

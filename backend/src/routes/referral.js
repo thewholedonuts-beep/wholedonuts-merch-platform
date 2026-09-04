@@ -1,6 +1,6 @@
 const express = require('express');
 const { query, withTransaction } = require('../config/database');
-const { referralValidationLimiter } = require('../middleware/rateLimiter');
+const { referralLimiters, sensitiveAccountLimiters } = require('../middleware/rateLimiter');
 const { hashIp, validateReferralCodeFormat } = require('../utils/referralCode');
 const { calculateEffortScore } = require('../utils/effortScore');
 const { referralAnalyticsEnabled, rewardsEnabled } = require('../config/environment');
@@ -33,7 +33,7 @@ function parseMetadata(value) {
   return value && typeof value === 'object' ? value : {};
 }
 
-router.post('/validate', requireAnalytics, referralValidationLimiter, async (req, res, next) => {
+router.post('/validate', requireAnalytics, ...referralLimiters, async (req, res, next) => {
   try {
     const { code } = req.body;
     const userAgent = req.get('user-agent') || '';
@@ -143,7 +143,7 @@ router.post('/validate', requireAnalytics, referralValidationLimiter, async (req
   }
 });
 
-router.post('/event', requireAnalytics, async (req, res, next) => {
+router.post('/event', requireAnalytics, ...referralLimiters, async (req, res, next) => {
   try {
     const { code, eventType, referrer, metadata } = req.body;
     const userAgent = req.get('user-agent') || '';
@@ -203,7 +203,7 @@ router.post('/event', requireAnalytics, async (req, res, next) => {
   }
 });
 
-router.post('/acceptance', requireRewards, authenticateToken, requireAdmin, async (req, res, next) => {
+router.post('/acceptance', requireRewards, authenticateToken, requireAdmin, ...sensitiveAccountLimiters, async (req, res, next) => {
   try {
     const result = await withTransaction((client) => recordVerifiedInviteAcceptance(client, {
       code: req.body.code,
