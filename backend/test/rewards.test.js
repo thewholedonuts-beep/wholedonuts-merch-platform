@@ -186,49 +186,6 @@ test('verified purchaser identity cannot match the sponsor identity', async () =
       orderId: 'shopify-order-self',
       purchaserIdentity: { provider: 'shopify', subject: 'gid://shopify/Customer/1001' },
     });
-
-    test('Shopify numeric and GraphQL customer IDs normalize to the same identity', () => {
-      const originalSalt = process.env.REWARD_REFERENCE_SALT;
-      process.env.REWARD_REFERENCE_SALT = 'test-reward-reference-salt';
-      try {
-        assert.equal(
-          hashRewardIdentity('shopify', '1001'),
-          hashRewardIdentity('SHOPIFY', 'gid://shopify/Customer/001001')
-        );
-        assert.throws(() => hashRewardIdentity('shopify', 'person@example.test'), /Shopify customer ID/);
-      } finally {
-        if (originalSalt === undefined) delete process.env.REWARD_REFERENCE_SALT;
-        else process.env.REWARD_REFERENCE_SALT = originalSalt;
-      }
-    });
-
-    test('verified acceptance rejects the sponsor Shopify identity', async () => {
-      const originalFlag = process.env.CRUMB_SAVER_REWARDS_ENABLED;
-      const originalSalt = process.env.REWARD_REFERENCE_SALT;
-      const originalNotice = process.env.REWARDS_PRIVACY_NOTICE_VERSION;
-      process.env.CRUMB_SAVER_REWARDS_ENABLED = 'true';
-      process.env.REWARD_REFERENCE_SALT = 'test-reward-reference-salt';
-      process.env.REWARDS_PRIVACY_NOTICE_VERSION = '2026-09';
-      const identityHash = hashRewardIdentity('shopify', '1001');
-      const client = queuedClient([
-        { rowCount: 1, rows: [{ id: 'code-id', sponsor_id: 'sponsor-id', reward_identity_hash: identityHash }] },
-      ]);
-      try {
-        const result = await recordVerifiedInviteAcceptance(client, {
-          code: 'WD-CODE',
-          recipientIdentity: { provider: 'shopify', subject: '1001' },
-        });
-        assert.equal(result.rejected, 'self-referral');
-        assert.equal(client.calls.length, 1);
-      } finally {
-        if (originalFlag === undefined) delete process.env.CRUMB_SAVER_REWARDS_ENABLED;
-        else process.env.CRUMB_SAVER_REWARDS_ENABLED = originalFlag;
-        if (originalSalt === undefined) delete process.env.REWARD_REFERENCE_SALT;
-        else process.env.REWARD_REFERENCE_SALT = originalSalt;
-        if (originalNotice === undefined) delete process.env.REWARDS_PRIVACY_NOTICE_VERSION;
-        else process.env.REWARDS_PRIVACY_NOTICE_VERSION = originalNotice;
-      }
-    });
     assert.equal(result.rejected, 'self-referral');
     assert.equal(client.calls.length, 4);
   } finally {
@@ -236,5 +193,48 @@ test('verified purchaser identity cannot match the sponsor identity', async () =
     else process.env.CRUMB_SAVER_REWARDS_ENABLED = originalFlag;
     if (originalSalt === undefined) delete process.env.REWARD_REFERENCE_SALT;
     else process.env.REWARD_REFERENCE_SALT = originalSalt;
+  }
+});
+
+test('Shopify numeric and GraphQL customer IDs normalize to the same identity', () => {
+  const originalSalt = process.env.REWARD_REFERENCE_SALT;
+  process.env.REWARD_REFERENCE_SALT = 'test-reward-reference-salt';
+  try {
+    assert.equal(
+      hashRewardIdentity('shopify', '1001'),
+      hashRewardIdentity('SHOPIFY', 'gid://shopify/Customer/001001')
+    );
+    assert.throws(() => hashRewardIdentity('shopify', 'person@example.test'), /Shopify customer ID/);
+  } finally {
+    if (originalSalt === undefined) delete process.env.REWARD_REFERENCE_SALT;
+    else process.env.REWARD_REFERENCE_SALT = originalSalt;
+  }
+});
+
+test('verified acceptance rejects the sponsor Shopify identity', async () => {
+  const originalFlag = process.env.CRUMB_SAVER_REWARDS_ENABLED;
+  const originalSalt = process.env.REWARD_REFERENCE_SALT;
+  const originalNotice = process.env.REWARDS_PRIVACY_NOTICE_VERSION;
+  process.env.CRUMB_SAVER_REWARDS_ENABLED = 'true';
+  process.env.REWARD_REFERENCE_SALT = 'test-reward-reference-salt';
+  process.env.REWARDS_PRIVACY_NOTICE_VERSION = '2026-09';
+  const identityHash = hashRewardIdentity('shopify', '1001');
+  const client = queuedClient([
+    { rowCount: 1, rows: [{ id: 'code-id', sponsor_id: 'sponsor-id', reward_identity_hash: identityHash }] },
+  ]);
+  try {
+    const result = await recordVerifiedInviteAcceptance(client, {
+      code: 'WD-CODE',
+      recipientIdentity: { provider: 'shopify', subject: '1001' },
+    });
+    assert.equal(result.rejected, 'self-referral');
+    assert.equal(client.calls.length, 1);
+  } finally {
+    if (originalFlag === undefined) delete process.env.CRUMB_SAVER_REWARDS_ENABLED;
+    else process.env.CRUMB_SAVER_REWARDS_ENABLED = originalFlag;
+    if (originalSalt === undefined) delete process.env.REWARD_REFERENCE_SALT;
+    else process.env.REWARD_REFERENCE_SALT = originalSalt;
+    if (originalNotice === undefined) delete process.env.REWARDS_PRIVACY_NOTICE_VERSION;
+    else process.env.REWARDS_PRIVACY_NOTICE_VERSION = originalNotice;
   }
 });
